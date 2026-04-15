@@ -16,7 +16,7 @@ The goal for this project is to encourage regional institutions to produce and s
 * **Modularity** - It should be possible to merge any two datasets programatically, whilst keeping the above properties
 * **Open Source** CC-BY licence, where no licence already exists for a given row-item in the metadata
 
-Whilst open-sourcing the training data, regional institutions should also be encouraged to make careful use of the metadata to create independent test sets for model calibration.
+Whilst open-sourcing the training data, regional institutions should also be encouraged to make careful use of the metadata to create and hold back independent test sets for model calibration.
 
 By creating models that also predict time-frequency boxes in the same format, we enable model calibration, scaling and continuous improvement of the datasets through human-in-loop reviewing.
 
