@@ -1,9 +1,10 @@
 from datetime import date
 from pathlib import Path
 import ast
-import matplotlib
 import math
 import matplotlib.pyplot as plt
+from matplotlib.patches import Rectangle
+from matplotlib.text import Text
 import numpy as np
 import pandas as pd
 from IPython.display import display, HTML
@@ -21,7 +22,6 @@ from threading import Timer
 from dataclasses import dataclass
 import sounddevice as sd
 
-
 # ---------------------------------------------------------------------------
 # Schema definitions
 # ---------------------------------------------------------------------------
@@ -30,6 +30,12 @@ class DataFrameSchema:
     
     Columns absent from the schema are left untouched. Values that cannot be
     coerced are set to NaN/NaT silently.
+
+    Supported dtypes:
+        - "datetime64[ns]": parsed to pandas datetime
+        - "date": ISO 8601 date strings ("YYYY-MM-DD"), stored as object dtype
+        - "string": pandas StringDtype
+        - anything else: attempted via pd.to_numeric
     """
 
     def __init__(self, schema: dict[str, str]):
@@ -40,14 +46,25 @@ class DataFrameSchema:
         df = df.copy()
         for col, dtype in self.schema.items():
             if col not in df.columns:
+                if dtype == "datetime64[ns]":
+                    df[col] = pd.Series(dtype="datetime64[ns]")
+                elif dtype == "date":
+                    df[col] = None
+                elif dtype == "string":
+                    df[col] = pd.Series(dtype="string")
+                else:
+                    df[col] = pd.Series(dtype="float64")
                 continue
             try:
-                if dtype == 'datetime64[ns]':
-                    df[col] = pd.to_datetime(df[col], errors='coerce')
-                elif dtype == 'string':
-                    df[col] = df[col].astype('string')
+                if dtype == "datetime64[ns]":
+                    df[col] = pd.to_datetime(df[col], errors="coerce")
+                elif dtype == "date":
+                    df[col] = pd.to_datetime(df[col], errors="coerce").dt.strftime("%Y-%m-%d")
+                    df[col] = df[col].where(df[col].notna(), other=None)
+                elif dtype == "string":
+                    df[col] = df[col].astype("string")
                 else:
-                    df[col] = pd.to_numeric(df[col], errors='coerce')
+                    df[col] = pd.to_numeric(df[col], errors="coerce")
             except Exception:
                 pass
         return df
@@ -56,6 +73,7 @@ class DataFrameSchema:
 _metadata_schema = DataFrameSchema({
     'filename':         'string',
     'collection':       'string',
+    'primary_label':    'string',
     'secondary_labels': 'string',
     'url':              'string',
     'latitude':         'float64',
@@ -64,7 +82,7 @@ _metadata_schema = DataFrameSchema({
     'license':          'string',
     'recorded_on':      'datetime64[ns]',
     'reviewed_by':      'string',
-    'reviewed_on':      'datetime64[ns]',
+    'reviewed_on':      'date',
     'source_filename':  'string',
     'source_start_s':   'float64',
     'source_end_s':     'float64',
@@ -89,7 +107,18 @@ _label_schema = DataFrameSchema({
 })
 
 
-
+class MiniBirdNamer:
+    '''Handles bird name conversions from a csv file with an eBird column and a CommonName column
+       This is a cut-down version of BirdNamer from WildPyTools'''
+    def __init__(self,
+                 naming_csv_path: Path,
+                 common_col_name: str='CommonName',
+                 ebird_col_name: str='eBird',
+                 ):
+        _mapping_df = pd.read_csv(naming_csv_path)
+        self.common_to_ebird_dict = dict(zip(_mapping_df[common_col_name], _mapping_df[ebird_col_name]))
+        self.e_names = list(set(_mapping_df[ebird_col_name]))
+        self.common_names = list(set(_mapping_df[common_col_name]))
 
 def calc_signal_pwr(wav, chunk_len, sr=32000):
     power = wav ** 2 
@@ -323,7 +352,7 @@ class FastMap:
         if ax is None:
             self.fig, self.ax = plt.subplots(figsize=figsize, num="Location (if available)")
             self.fig.subplots_adjust(left=0, right=1, top=1, bottom=0)
-            self.ax.set_position([0, 0, 1, 1])
+            self.ax.set_position((0, 0, 1, 1))
             self._owns_figure = True
         else:
             self.ax = ax
@@ -413,7 +442,7 @@ def normalise_labels_df(df, schema):
 # Annotation State
 # ----------------------------
 class AnnotationState:
-    def __init__(self, all_classes, max_visible=30):
+    def __init__(self, all_classes, namer: MiniBirdNamer, max_visible=30, ):
         self.all_classes = list(sorted(all_classes))            # master list
         self.max_visible = max_visible
         self.visible_classes = ['Unknown', 'Unknown Insect']
@@ -422,6 +451,8 @@ class AnnotationState:
         self.life_stage = None
         self.score = None
         self.call_type = None
+        self.common_to_ebird  = namer.common_to_ebird_dict
+
 
     # Set the current active class for annotation
     def set_label(self, label):
@@ -451,7 +482,7 @@ class AnnotationState:
             return
 
         folder = Path(filepath).parent.name
-        cls = self.ebird_to_common.get(folder)
+        cls = self.ebird_to_common.get(folder)  #########Need to think carefully about this, ebird to common can be one to many#############################
 
         if cls is None:
             return
@@ -476,9 +507,9 @@ class AnnotationState:
 
 
 def create_class_widgets(annotation_state,
-                         fastmap: FastMap=None,
+                         fastmap: FastMap|None=None,
                          n_columns: int=5,
-                         common_to_ebird: dict=None
+                         common_to_ebird: dict|None=None
                          ):
     # --- Checkbox grid for class visibility ---
 
@@ -556,7 +587,6 @@ def create_class_widgets(annotation_state,
     ]
         radio_class.options = options
     
-        
         if annotation_state.current_label not in visible and visible:
             radio_class.value = visible[0]
 
@@ -581,7 +611,6 @@ def create_class_widgets(annotation_state,
     # --- Map display inline (ipympl canvas) ---
     if fastmap is not None:
         canvas_widget = fastmap.fig.canvas
-        canvas_widget.layout.width = '40%'  # adjust as desired
         radio_columns.append(canvas_widget)
 
     # --- Bottom row ---
@@ -636,7 +665,7 @@ def zoom_in_on_wav(
     new_sr    = min(sr, target_sr)
 
     if abs(new_sr - sr) < 1:
-        new_sr    = sr
+        new_sr    = int(sr)
         resampled = filtered
     else:
         up, down = int(new_sr), int(sr)
@@ -644,7 +673,7 @@ def zoom_in_on_wav(
         up      //= g
         down    //= g
         resampled = resample_poly(filtered, up, down)
-        new_sr    = sr * up / down
+        new_sr    = int(sr * up / down)
 
     # 3. TIME CROP after resample so indices use new_sr
     t_start = max(0.0, x_left)
@@ -752,11 +781,11 @@ class SpectrogramData:
 
     def hz_to_row(self, y_hz):
         """Map physical Hz to mel spectrogram row index."""
-        return np.interp(y_hz, self.frequencies, np.arange(self.n_rows))
+        return float(np.interp(y_hz, self.frequencies, np.arange(self.n_rows)))
 
     def row_to_hz(self, y_row):
         """Map mel spectrogram row index to physical Hz."""
-        return np.interp(y_row, np.arange(len(self.frequencies)), self.frequencies)
+        return float(np.interp(y_row, np.arange(len(self.frequencies)), self.frequencies))
 
     def hz_to_stft_row(self, hz):
         return np.searchsorted(self.stft_freqs, hz)
@@ -793,8 +822,8 @@ class SpectrogramData:
         wav, sr = librosa.load(filepath, sr=None)
         duration_seconds = len(wav) / sr
 
-        specmaker = MelSpecMaker(sr=sr, n_mels=n_mels, f_min=f_min, f_max=f_max, pcen=False)
-        stftmaker = STFTMaker(sr=sr)
+        specmaker = MelSpecMaker(sr=int(sr), n_mels=n_mels, f_min=f_min, f_max=f_max, pcen=False)
+        stftmaker = STFTMaker(sr=int(sr))
         mel_spec_db, time_axis, frequencies = specmaker.create_melspec(wav)
         stft_power, stft_time, stft_freqs = stftmaker.create_stft(wav)  #need to ad
 
@@ -802,7 +831,7 @@ class SpectrogramData:
 
         return cls(
             wav=wav,
-            sr=sr,
+            sr=int(sr),
             duration_seconds=duration_seconds,
             mel_spec_db=mel_spec_db,
             time_axis=time_axis,
@@ -819,6 +848,8 @@ class SpectrogramData:
 # AnnotationStore
 # =============================================================================
 
+
+
 class AnnotationStore:
     """
     Owns annotation data and the corresponding matplotlib artists.
@@ -827,10 +858,10 @@ class AnnotationStore:
 
     def __init__(self):
         self.boxes: list[dict] = []
-        self._box_artists: list[plt.Rectangle] = []
-        self._text_artists: list[plt.Text] = []
+        self._box_artists: list[Rectangle] = []
+        self._text_artists: list[Text] = []
 
-    def add(self, box_dict: dict, rect: plt.Rectangle, text: plt.Text):
+    def add(self, box_dict: dict, rect: Rectangle, text: Text):
         self.boxes.append(box_dict)
         self._box_artists.append(rect)
         self._text_artists.append(text)
@@ -907,7 +938,7 @@ class SpectrogramAnnotator:
         self.similarness_threshold = similarness_threshold
 
         # --- data and annotations ---
-        self.data: SpectrogramData | None = None
+        #self.data: SpectrogramData | None = None
         self.annotations = AnnotationStore()
         self._last_box_freq = None  # (ymin_hz, ymax_hz)
         self.band_power = None
@@ -920,16 +951,16 @@ class SpectrogramAnnotator:
         self.zoom_rect = None
 
         # --- playhead artist handles ---
-        self.centre_dot = None
+        #self.centre_dot = None
         self.playhead_power = None
         self.playhead_spec = None
         self.playhead_zoom = None
 
         # --- file state ---
         self.file_loaded = False
-        self.filepath = None
-        self.meta_row = None
-        self.label_rows = None
+        #self.filepath = None
+        #self.meta_row = None
+        #self.label_rows = None
 
         # --- build figure ---
         self._interactive_state = plt.isinteractive()
@@ -1070,18 +1101,19 @@ class SpectrogramAnnotator:
         return self.container
 
     def _render(self):
+        self.annotations.clear()
         self.ax_spec.clear()
         self.ax_power.clear()
-        self.centre_dot    = None
+        #self.centre_dot    = None
         self.playhead_power = None
         self.playhead_spec  = None
         self.zoom_rect      = None
-        self.annotations.clear()
+        
 
         d = self.data
         t_power  = np.linspace(0, d.duration_seconds, len(d.power))
         n_rows, n_cols = d.mel_spec_db.shape
-        extent = [0, d.duration_seconds, 0, n_rows]
+        extent = (0, d.duration_seconds, 0, n_rows)
 
         spec = d.mel_spec_db.copy()
         vmin_global = np.percentile(spec, .5)
@@ -1170,7 +1202,6 @@ class SpectrogramAnnotator:
             ncol=2
         )
 
-        self.fig.canvas.header_visible = False
         self.ax_spec.set_xlim(0, d.duration_seconds)
         self.fig.canvas.draw_idle()
 
@@ -1204,16 +1235,17 @@ class SpectrogramAnnotator:
         height = r1 - r0
         y0     = r0
 
+        
         if self.zoom_rect is None:
-            self.zoom_rect = plt.Rectangle(
-                                            (self.t_marker, y0),
-                                            self.zoom_window_width,
-                                            height,
-                                            edgecolor='white',
-                                            facecolor='none',
-                                            linewidth=1,
-                                            linestyle='--',
-                                            zorder=10,
+            self.zoom_rect = Rectangle(
+                                        (self.t_marker, y0),
+                                        self.zoom_window_width,
+                                        height,
+                                        edgecolor='white',
+                                        facecolor='none',
+                                        linewidth=1,
+                                        linestyle='--',
+                                        zorder=10,
                                         )
             self.ax_spec.add_patch(self.zoom_rect)
         else:
@@ -1257,12 +1289,8 @@ class SpectrogramAnnotator:
         spec_norm    = (spec_clipped - vmin_global) / (vmax_global - vmin_global)      
         spec_vis     = spec_norm ** 0.6
 
-        extent = [
-            time_axis[0]  + self.t_marker,
-            time_axis[-1] + self.t_marker,
-            freqs_sliced[0],
-            freqs_sliced[-1],
-        ]
+        extent = (time_axis[0]  + self.t_marker, time_axis[-1] + self.t_marker,
+                  freqs_sliced[0],  freqs_sliced[-1])
 
         self.ax_side.imshow(
             spec_vis,
@@ -1283,7 +1311,6 @@ class SpectrogramAnnotator:
         self.ax_side.set_yticks(yticks)
         self.ax_side.set_yticklabels([f"{f:.0f}" for f in yticks])
         self.ax_side.set_xlabel("Time (s)")
-        self.fig.canvas.header_visible = False
         self.fig.canvas.draw_idle()
 
 
@@ -1339,7 +1366,7 @@ class SpectrogramAnnotator:
                 'Life Stage':                  row.get('Life Stage'),
             }
 
-            rect = plt.Rectangle(
+            rect = Rectangle(
                 (xmin, ymin_row), xmax - xmin, ymax_row - ymin_row,
                 edgecolor='lime', facecolor='none', linewidth=2, zorder=10
             )
@@ -1434,16 +1461,16 @@ class SpectrogramAnnotator:
         if self._drag_rect is not None:
             self._drag_rect.remove()
 
-        self._drag_rect = plt.Rectangle(
-            (xmin, ymin_idx),
-            xmax - xmin,
-            ymax_idx - ymin_idx,
-            edgecolor='lime',
-            facecolor='lime',
-            alpha=0.25,
-            linewidth=2,
-            zorder=15,
-        )
+        self._drag_rect = Rectangle(
+                                    (xmin, ymin_idx),
+                                    xmax - xmin,
+                                    ymax_idx - ymin_idx,
+                                    edgecolor='lime',
+                                    facecolor='lime',
+                                    alpha=0.25,
+                                    linewidth=2,
+                                    zorder=15,
+                                    )
 
         self.ax_spec.add_patch(self._drag_rect)
         self.fig.canvas.draw_idle()
@@ -1545,15 +1572,15 @@ class SpectrogramAnnotator:
             'Life Stage':                   self.annotation_state.life_stage,
         }
 
-        rect = plt.Rectangle(
-            (xmin, ymin_idx),
-            xmax - xmin,
-            ymax_idx - ymin_idx,
-            edgecolor='lime',
-            facecolor='none',
-            linewidth=2,
-            zorder=10,
-        )
+        rect = Rectangle(
+                        (xmin, ymin_idx),
+                        xmax - xmin,
+                        ymax_idx - ymin_idx,
+                        edgecolor='lime',
+                        facecolor='none',
+                        linewidth=2,
+                        zorder=10,
+                        )
         self.ax_spec.add_patch(rect)
 
         y_offset = 0.01 * (self.ax_spec.get_ylim()[1] - self.ax_spec.get_ylim()[0])
@@ -1657,7 +1684,7 @@ class SpectrogramAnnotator:
                 'Life Stage':                   self.annotation_state.life_stage,
             }
 
-            rect = plt.Rectangle(
+            rect = Rectangle(
                 (xmin, ymin_idx_s),
                 xmax - xmin,
                 ymax_idx_s - ymin_idx_s,
@@ -1682,12 +1709,9 @@ class SpectrogramAnnotator:
                 zorder=11,
             )
             self.annotations.undo()
-            self.annotations.add(box_dict, rect, text)
-            
+            self.annotations.add(box_dict, rect, text)   
 
         self.fig.canvas.draw_idle()
-
-
 
     def _propagate_boxes_from_template(self):
         """
@@ -1695,14 +1719,11 @@ class SpectrogramAnnotator:
         compute normalised cosine similarity at each position,
         then place boxes at positions above a fraction of the peak score.
         """
-        self._debug = {'reached': True}
 
         if self.data is None or self._last_box_freq is None or self._last_box_time is None:
-            self._debug['failed_at'] = 'guard clause'
             return
 
         if not self.annotations.boxes:
-            self._debug['failed_at'] = 'no annotation to use as seed'
             return
 
         # --- read seed coords BEFORE undoing ---
@@ -1726,16 +1747,7 @@ class SpectrogramAnnotator:
         template = band[:, seed_xmin_idx:seed_xmax_idx]
         w = template.shape[1]
 
-        self._debug.update({
-            'band_shape': band.shape,
-            'template_shape': template.shape,
-            'seed_xmin_idx': seed_xmin_idx,
-            'seed_xmax_idx': seed_xmax_idx,
-            'w': w,
-        })
-
         if w == 0 or w >= band.shape[1]:
-            self._debug['failed_at'] = 'template too wide or empty'
             return
 
         # --- normalise template ---
@@ -1759,24 +1771,12 @@ class SpectrogramAnnotator:
         half_w = w // 2
         min_distance = max(1, half_w)
 
-        self._debug.update({
-            'n_steps': n_steps,
-            'scores_min': scores.min(),
-            'scores_max': scores.max(),
-            'scores_mean': scores.mean(),
-            'score_at_seed': scores[seed_xmin_idx],
-            'peak_score': peak_score,
-            'thresh': thresh,
-            'min_distance': min_distance,
-        })
 
         peak_indices, _ =find_peaks(
             scores_masked,
             height=thresh,
             distance=min_distance,
         )
-
-        self._debug['peak_indices'] = peak_indices
 
         # --- build intervals ---
         half_t = self._last_box_time / 2
@@ -1799,7 +1799,6 @@ class SpectrogramAnnotator:
                 intervals.append((xmin, xmax))
             last_centre = t_centre
 
-        self._debug['intervals'] = intervals
 
         # --- draw boxes ---
         for xmin, xmax in intervals:
@@ -1826,7 +1825,7 @@ class SpectrogramAnnotator:
                 'Life Stage':                   self.annotation_state.life_stage,
             }
 
-            rect = plt.Rectangle(
+            rect = Rectangle(
                 (xmin, ymin_idx_s),
                 xmax - xmin,
                 ymax_idx_s - ymin_idx_s,
@@ -1849,9 +1848,6 @@ class SpectrogramAnnotator:
             self.annotations.add(box_dict, rect, text)
 
         self.fig.canvas.draw_idle()
-
-
-
 
     # ----------------------------
     # Selection callback
@@ -1900,7 +1896,7 @@ class SpectrogramAnnotator:
         }
 
         # --- draw rectangle ---
-        rect = plt.Rectangle(
+        rect = Rectangle(
             (xmin, ymin_idx),
             xmax - xmin,
             ymax_idx - ymin_idx,
@@ -2011,22 +2007,15 @@ class AnnotationSession:
         self.label_schema = label_schema
         self.meta_schema = metadata_schema
 
-        self.label_headers = label_schema.headers
+        self.label_headers = self.label_schema.headers
         self.meta_headers = self.meta_schema.headers
 
-        #label_headers = ['Filename', 'Start Time (s)', 'End Time (s)', 'Low Freq (Hz)', 'High Freq (Hz)',
-        #                 'Label', 'Type', 'Sex', 'Score', 'Life Stage', 'Indv ID', 'Delta Time (s)',
-        #                 'Delta Freq (Hz)', 'Avg Power Density (dB FS/Hz)']
-
-        #meta_headers = ['filename', 'collection', 'primary_label', 'secondary_labels', 'url', 'latitude', 
-        #                'longitude', 'author', 'license', 'recorded_on', 'reviewed_by', 'reviewed_on', 
-        #                'source_filename', 'source_start_s', 'source_end_s', 'models_used']
-
         # Copy to avoid modifying original
-        self.df_meta = df_meta.copy()
+        self.df_meta = self.meta_schema.apply(df_meta).copy()
         self.df_meta["status"] = "pending"
 
-        self.df_labels = df_labels.copy() if df_labels is not None else pd.DataFrame(columns=self.label_headers)
+        _df_labels = df_labels if df_labels is not None else pd.DataFrame(columns=self.label_headers)
+        self.df_labels = self.label_schema.apply(_df_labels).copy()
 
         # Restore completed files if saved
         done_filenames = []
@@ -2062,8 +2051,6 @@ class AnnotationSession:
                 for col in df_labels_done.columns:
                     if df_labels_done[col].isna().all():
                         df_labels_done[col] = df_labels_done[col].astype("object")
-
-
 
                 if self.df_labels.empty:
                     self.df_labels = df_labels_done.copy()
@@ -2154,7 +2141,7 @@ class AnnotationSession:
         # ---- Update metadata ----
         self.df_meta.at[file_idx, "status"] = "done"
         self.df_meta.at[file_idx, "author"] = self.author
-        self.df_meta.at[file_idx, "reviewed_on"] = date.today()
+        self.df_meta.at[file_idx, "reviewed_on"] = date.today().isoformat()
         self.df_meta.at[file_idx, "reviewed_by"] = self.reviewer
 
         # ---- Persist only completed rows ----
@@ -2412,17 +2399,3 @@ class AnnotationControls:
     # ---- Display everything ----
     def display(self):
         display(self.container)
-
-
-class MiniBirdNamer:
-    '''Handles bird name conversions from a csv file with an eBird column and a CommonName column
-       This is a cut-down version of BirdNamer from WildPyTools'''
-    def __init__(self,
-                 naming_csv_path: Path,
-                 common_col_name: str='CommonName',
-                 ebird_col_name: str='eBird',
-                 ):
-        _mapping_df = pd.read_csv(naming_csv_path)
-        self.common_to_ebird_dict = dict(zip(_mapping_df[common_col_name], _mapping_df[ebird_col_name]))
-        self.e_names = list(set(_mapping_df[ebird_col_name]))
-        self.common_names = list(set(_mapping_df[common_col_name]))
