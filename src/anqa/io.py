@@ -6,10 +6,6 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-
-
-
-
 from pathlib import Path
 from datetime import datetime
 from typing import Optional, Tuple, Dict
@@ -142,8 +138,6 @@ def extract_recording_datetime(
             pass
 
     return None, None
-
-
 
 
 

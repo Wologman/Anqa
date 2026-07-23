@@ -16,10 +16,13 @@ import time
 import matplotlib.gridspec as gridspec
 import threading
 import contextily as cx
+import xyzservices.providers as xyz
 from scipy.signal import butter, filtfilt, resample_poly, find_peaks
 from math import gcd
 from threading import Timer
+from typing import Optional, Union
 from dataclasses import dataclass
+from typing import cast
 import sounddevice as sd
 
 # ---------------------------------------------------------------------------
@@ -84,8 +87,10 @@ _metadata_schema = DataFrameSchema({
     'reviewed_by':      'string',
     'reviewed_on':      'date',
     'source_filename':  'string',
+    'source_sr_khz':    'float64',        
     'source_start_s':   'float64',
     'source_end_s':     'float64',
+    'source_device':    'string',
     'models_used':      'string',
 })
 
@@ -107,6 +112,35 @@ _label_schema = DataFrameSchema({
 })
 
 
+
+def load_labels(
+    path: Optional[Union[str, Path]]
+) -> pd.DataFrame:
+    """
+    Load a DataFrame from CSV or Parquet.
+    Returns an empty DataFrame if path is None.
+    Raises for unsupported suffixes.
+    """
+    if path is None:
+        return _label_schema.apply(pd.DataFrame())
+
+    path = Path(path)
+
+    try:
+        if path.suffix.lower() == ".csv":
+            df = pd.read_csv(path)
+        elif path.suffix.lower() == ".parquet":
+            df = pd.read_parquet(path)
+        else:
+            raise ValueError(f"Unsupported {name} format: {path.suffix}")
+    except Exception as e:
+        raise RuntimeError(f"Failed to load {name} from {path}") from e
+
+    df = _label_schema.apply(df).copy()
+
+    return df
+
+
 class MiniBirdNamer:
     '''Handles bird name conversions from a csv file with an eBird column and a CommonName column
        This is a cut-down version of BirdNamer from WildPyTools'''
@@ -120,7 +154,7 @@ class MiniBirdNamer:
         self.e_names = list(set(_mapping_df[ebird_col_name]))
         self.common_names = list(set(_mapping_df[common_col_name]))
 
-def calc_signal_pwr(wav, chunk_len, sr=32000):
+def calc_signal_pwr(wav, chunk_len):
     power = wav ** 2 
     power = np.pad(power, (0, int(np.ceil(len(power) / chunk_len) * chunk_len - len(power))))
     power = power.reshape((-1, chunk_len)).sum(axis=1)
@@ -166,35 +200,6 @@ def normalize_secondary_labels(x):
 
     # Fallback (unknown type)
     return [str(x)]
-
-
-
-
-class CQTSpectrogramMaker:
-    def __init__(self, sr=32000, n_bins=84, fmin=20, bins_per_octave=12):
-        self.sr = sr
-        self.n_bins = n_bins
-        self.fmin = fmin
-        self.bins_per_octave = bins_per_octave
-
-    def create_cqt(self, waveform):
-        cqt = librosa.cqt(
-            waveform,
-            sr=self.sr,
-            fmin=self.fmin,
-            n_bins=self.n_bins,
-            bins_per_octave=self.bins_per_octave
-        )
-        cqt_db = librosa.amplitude_to_db(np.abs(cqt))
-        num_frames = cqt_db.shape[1]
-        duration = len(waveform) / self.sr
-        time_axis = np.linspace(0, duration, num=num_frames)
-        freqs = librosa.cqt_frequencies(
-            n_bins=self.n_bins,
-            fmin=self.fmin,
-            bins_per_octave=self.bins_per_octave
-        )
-        return cqt_db, time_axis, freqs
 
 
 class MelSpecMaker:
@@ -279,8 +284,6 @@ class MelSpecMaker:
         return mel_spec, time_axis, frequencies
 
 
-
-
 class STFTMaker():
     def __init__(self, sr=32000, n_fft=2048, hop_length = 512):
         self.sr = sr
@@ -305,8 +308,10 @@ class STFTMaker():
                                 )
         return power, times, freqs
 
+import xyzservices.providers as xyz
 
 class FastMap:
+    '''Uses lat and long from the file metadata to place the location on a map'''
 
     # Default extents in WGS84
     default_extents = {
@@ -318,13 +323,15 @@ class FastMap:
 
     def __init__(
         self,
-        provider=cx.providers.OpenStreetMap.Mapnik,
-        #provider: dict = cx.providers["OpenStreetMap"]["Mapnik"],
-        figsize=(3, 3),
+        #provider = xyz.query_name("OpenStreetMap.Mapnik"),  # type: ignore[attr-defined]
+        #provider=xyz.OpenStreetMap.Mapnik,   # pylint: disable=no-member
+        provider: dict = cx.providers.OpenStreetMap.Mapnik,  # type: ignore[attr-defined]
+        figsize: tuple =(3, 3),
         ax=None,
-        map_extents=None,
-        web_mercator_extents=None        # e.g. {'min_x': ..., 'max_x': ..., 'min_y': ..., 'max_y': ...}
-    ):
+        map_extents=None, # WGS84
+        web_mercator_extents=None  # e.g. {'min_x': ..., 'max_x': ..., 'min_y': ..., 'max_y': ...}
+        ):
+
         self.provider = provider
 
         if web_mercator_extents is not None:
@@ -417,8 +424,6 @@ class FastMap:
             plt.ion()
 
 
-
-
 def normalise_labels_df(df, schema):
     # ensure all expected columns exist
     for c in schema:
@@ -434,7 +439,6 @@ def normalise_labels_df(df, schema):
             df[c] = df[c].astype("object")
     df = df.astype(object)
     
-
     return df
 
 
@@ -452,7 +456,6 @@ class AnnotationState:
         self.score = None
         self.call_type = None
         self.common_to_ebird  = namer.common_to_ebird_dict
-
 
     # Set the current active class for annotation
     def set_label(self, label):
@@ -475,45 +478,15 @@ class AnnotationState:
 
     def get_all_classes(self):
         return self.all_classes
-    
-    def autoselect_class_from_session(self, session):
-        filepath = getattr(session, "current_filepath", None)
-        if filepath is None:
-            return
-
-        folder = Path(filepath).parent.name
-        cls = self.ebird_to_common.get(folder)  #########Need to think carefully about this, ebird to common can be one to many#############################
-
-        if cls is None:
-            return
-
-        visible = self.get_visible_classes()
-
-        if cls not in visible:
-            visible.append(cls)
-            self.set_visible_classes(visible)  # enforces max_visible truncation
-
-        # update radio widget options to match the (possibly truncated) visible list
-        options = [
-            (f"{c} ({self.common_to_ebird.get(c, '')})", c)
-            for c in self.visible_classes  # use self.visible_classes, not visible, in case it was truncated
-        ]
-        self.radio_class.options = options
-
-        # only set if cls survived truncation
-        if cls in self.visible_classes:
-            self.radio_class.value = cls
-            self.current_label = cls
 
 
 def create_class_widgets(annotation_state,
                          fastmap: FastMap|None=None,
                          n_columns: int=5,
-                         common_to_ebird: dict|None=None
+                         common_to_ebird: dict={},
                          ):
+    
     # --- Checkbox grid for class visibility ---
-
-
     checkboxes = []
     for cls in annotation_state.get_all_classes():
         cb = widgets.Checkbox(
@@ -657,8 +630,18 @@ def zoom_in_on_wav(
     # 1. BANDPASS FILTER on full wav (avoids edge artifacts from cropping first)
     low  = f_min_hz / (sr / 2)
     high = f_max_hz / (sr / 2)
-    b, a = butter(filter_order, [low, high], btype='band')
-    filtered = filtfilt(b, a, wav)
+    
+    result = butter(filter_order, [low, high], btype='band', output='ba')
+
+    result = cast(
+        tuple[np.ndarray, np.ndarray],
+        butter(filter_order, [low, high], btype='band', output='ba')
+    )
+
+    if result is not None:
+        b, a = result  #I don't understand this issue
+        filtered = filtfilt(b, a, wav)
+    else: filtered = wav
 
     # 2. RESAMPLE
     target_sr = nyquist_margin * 2 * f_max_hz
@@ -813,13 +796,20 @@ class SpectrogramData:
 
     @classmethod
     def from_file(cls,
-                  filepath,
-                  n_mels=128,
-                  f_min=20,
-                  f_max=14000,
-                  power_time_steps=0.1):
+                filepath,
+                n_mels=128,
+                f_min=20,
+                f_max=14000,
+                power_time_steps=0.1,
+                target_sr=32000):
         """Load audio and compute all derived data."""
         wav, sr = librosa.load(filepath, sr=None)
+        original_sr = sr
+
+        if sr != target_sr:
+            wav = librosa.resample(wav, orig_sr=sr, target_sr=target_sr, res_type="soxr_hq")
+            sr = target_sr
+
         duration_seconds = len(wav) / sr
 
         specmaker = MelSpecMaker(sr=int(sr), n_mels=n_mels, f_min=f_min, f_max=f_max, pcen=False)
@@ -830,25 +820,23 @@ class SpectrogramData:
         power = calc_signal_pwr(wav, chunk_len=int(sr * power_time_steps))
 
         return cls(
-            wav=wav,
-            sr=int(sr),
-            duration_seconds=duration_seconds,
-            mel_spec_db=mel_spec_db,
-            time_axis=time_axis,
-            frequencies=frequencies,
-            stft_power=stft_power,
-            stft_time=stft_time,
-            stft_freqs=stft_freqs,
-            freq_resolution=stftmaker.freq_resolution,
-            power=power,
-        )
+                    wav=wav,
+                    sr=int(sr),
+                    duration_seconds=duration_seconds,
+                    mel_spec_db=mel_spec_db,
+                    time_axis=time_axis,
+                    frequencies=frequencies,
+                    stft_power=stft_power,
+                    stft_time=stft_time,
+                    stft_freqs=stft_freqs,
+                    freq_resolution=stftmaker.freq_resolution,
+                    power=power,
+                )
 
 
 # =============================================================================
 # AnnotationStore
 # =============================================================================
-
-
 
 class AnnotationStore:
     """
@@ -932,6 +920,8 @@ class SpectrogramAnnotator:
         self.full_width_box_max_hz = full_width_box_max_hz
         self._last_box_time = None
         self._last_box_rows = None
+        self._last_box_ymin_idx = None
+        self._last_box_ymax_idx = None
         self.min_drag_time = min_drag_time_s      # seconds
         self.min_drag_rows = min_drag_rows        # spectrogram rows
         self.min_separation = min_separation
@@ -1036,9 +1026,7 @@ class SpectrogramAnnotator:
     # ----------------------------
 
     def _play_audio(self, start_time=0.0):
-        sr = self.meta_row.get("sample_rate", None)
-        if sr is None:
-            sr = librosa.get_samplerate(self.filepath)
+        sr = self.data.sr
 
         start_sample = int(start_time * sr)
         wav_segment = self.data.wav[start_sample:]
@@ -1279,8 +1267,6 @@ class SpectrogramAnnotator:
         freqs_sliced = freqs[freq_mask]
 
         # --------------------------------------------------
-        # 
-        # 
         #  and display
         # --------------------------------------------------
         vmin_global  = np.percentile(spec, 2)
@@ -1312,7 +1298,6 @@ class SpectrogramAnnotator:
         self.ax_side.set_yticklabels([f"{f:.0f}" for f in yticks])
         self.ax_side.set_xlabel("Time (s)")
         self.fig.canvas.draw_idle()
-
 
 
     # ----------------------------
@@ -1517,16 +1502,17 @@ class SpectrogramAnnotator:
 
         if is_click:
             # treat as a click: place last-used box centred on cursor
-            if self._last_box_time is None or self._last_box_rows is None:
+            if (self._last_box_time is None
+                or self._last_box_ymin_idx is None
+                or self._last_box_ymax_idx is None):
                 self._drag_start = None
                 self._drag_moved = False
                 return
 
-            cx, cy = self._event_to_data(event)
+            cx, _cy = self._event_to_data(event)
             half_t = self._last_box_time / 2
-            half_r = self._last_box_rows / 2
             x0, x1 = cx - half_t, cx + half_t
-            y0, y1 = cy - half_r, cy + half_r
+            y0, y1 = self._last_box_ymin_idx, self._last_box_ymax_idx
 
         else:
             # genuine drag: reject if below minimum size
@@ -1544,6 +1530,8 @@ class SpectrogramAnnotator:
 
         # --- update band power line ---
         self._last_box_freq = (ymin_hz, ymax_hz)
+        self._last_box_ymin_idx = ymin_idx
+        self._last_box_ymax_idx = ymax_idx
         self._update_band_power(ymin_hz, ymax_hz)
 
         # remove preview rect
@@ -1798,7 +1786,6 @@ class SpectrogramAnnotator:
             else:
                 intervals.append((xmin, xmax))
             last_centre = t_centre
-
 
         # --- draw boxes ---
         for xmin, xmax in intervals:
@@ -2211,8 +2198,6 @@ class AnnotationSession:
             "total_minus_pending": total - pending,
         }
 
-
-
 def load_current_sample(session, annotator, paths, map_widget):
     meta_row, label_rows = session.current
 
@@ -2227,9 +2212,14 @@ def load_current_sample(session, annotator, paths, map_widget):
 
     annotation_state = annotator.annotation_state
 
-    # --- derive primary class from folder ---
-    folder = Path(filepath).parent.name
-    primary_cls = annotation_state.ebird_to_common.get(folder)
+    # --- derive primary class from metadata and as a backup from folder name
+
+    primary_label = meta_row.get('primary_label', None)
+    primary_cls = annotation_state.ebird_to_common.get(primary_label)
+
+    if primary_cls is None: 
+        folder = Path(filepath).parent.name
+        primary_cls = annotation_state.ebird_to_common.get(folder)
 
     # --- derive secondary classes from metadata ---
     secondary_ebirds = meta_row.get('secondary_labels', [])
@@ -2237,7 +2227,6 @@ def load_current_sample(session, annotator, paths, map_widget):
     # ensure it's a list (handle NaN / string edge cases)
     if isinstance(secondary_ebirds, str):
         # optional: only if stored as stringified list
-        
         try:
             secondary_ebirds = ast.literal_eval(secondary_ebirds)
         except Exception:
