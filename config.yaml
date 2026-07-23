@@ -1,0 +1,7 @@
+source_dataset_path: C:/Users/ollyp/OneDrive/Desktop/anqa/data/8kHz_source
+reviewed_data_destn: C:/Users/ollyp/OneDrive/Desktop/anqa/data/8khz_reviewed
+naming_csv: C:/Users/ollyp/OneDrive/Desktop/anqa/data/bird_names/bird_names.csv
+author: Olly
+reviewer: null
+map_extents: new_zealand
+display_width: 16

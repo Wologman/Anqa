@@ -1,0 +1,19 @@
+name: anqa
+channels:
+  - conda-forge
+dependencies:
+  - python>=3.10
+  - librosa
+  - matplotlib
+  - numpy
+  - pandas
+  - ipython
+  - ipywidgets
+  - ipykernel
+  - jupyterlab
+  - ipympl
+  - contextily
+  - scipy
+  - python-sounddevice
+  - pyarrow
+  - voila

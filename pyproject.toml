@@ -1,0 +1,38 @@
+[project]
+name = "anqa"
+version = "0.1.0"
+description = "Python methods for wildlife audio data using the Anqa format"
+readme = "README.md"
+authors = [
+  { name = "Olly Powell", email = "olly@wekaresearch.com" }
+]
+requires-python = ">=3.10"
+dependencies = [
+    "librosa",
+    "numpy",
+    "pandas",
+    "scipy",
+    "sounddevice",
+    "pyarrow",
+    "voila>=0.5.12",
+    "ipykernel>=7.3.0",
+    "ipywidgets>=8.1.8",
+    "ipympl>=0.10.0",
+]
+
+[project.optional-dependencies]
+notebook = [
+    "ipython",
+    "jupyterlab",
+    "ipympl",
+    "matplotlib",
+    "contextily",
+    "voila"
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
