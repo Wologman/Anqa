@@ -49,7 +49,6 @@ echo A browser window should open automatically.
 echo Keep this window open while you work - closing it will stop the tool.
 echo.
 
-uv run python config_editor.py
-uv run voila notebooks\annotation.ipynb
-
+uv run python src/anqa/config_editor.py
+uv run voila --TagRemovePreprocessor.remove_cell_tags='{"hide"}' notebooks/annotation.ipynb
 pause

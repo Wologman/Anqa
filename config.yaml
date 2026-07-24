@@ -5,3 +5,14 @@ author: Olly
 reviewer: null
 map_extents: new_zealand
 display_width: 16
+geographic_extents:
+  new_zealand:
+    min_longitude: 166
+    max_longitude: 179
+    min_latitude: -49
+    max_latitude: -34
+  south_america:
+    min_longitude: -82.0
+    max_longitude: -34.0
+    min_latitude: -56.0
+    max_latitude: 13.0
