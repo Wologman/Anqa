@@ -21,9 +21,11 @@ from scipy.signal import butter, filtfilt, resample_poly, find_peaks
 from math import gcd
 from threading import Timer
 from typing import Optional, Union
+from ipywidgets import Widget
 from dataclasses import dataclass
 from typing import cast
 import sounddevice as sd
+from collections import defaultdict
 
 # ---------------------------------------------------------------------------
 # Schema definitions
@@ -132,9 +134,9 @@ def load_labels(
         elif path.suffix.lower() == ".parquet":
             df = pd.read_parquet(path)
         else:
-            raise ValueError(f"Unsupported {name} format: {path.suffix}")
+            raise ValueError(f"Unsupported format: {path.suffix}")
     except Exception as e:
-        raise RuntimeError(f"Failed to load {name} from {path}") from e
+        raise RuntimeError(f"Failed to load {path} from {path}") from e
 
     df = _label_schema.apply(df).copy()
 
@@ -480,31 +482,70 @@ class AnnotationState:
         return self.all_classes
 
 
+
+
 def create_class_widgets(annotation_state,
                          fastmap: FastMap|None=None,
                          n_columns: int=5,
                          common_to_ebird: dict={},
+                         class_groups: dict[str, str] | None = None,
+                         group_order: list[str] | None = None,
                          ):
-    
-    # --- Checkbox grid for class visibility ---
-    checkboxes = []
-    for cls in annotation_state.get_all_classes():
-        cb = widgets.Checkbox(
-            value=cls in annotation_state.get_visible_classes(),
-            description=cls,
-            indent=False,
-            layout=widgets.Layout(width="auto")
-        )
-        checkboxes.append(cb)
+    """
+    class_groups: optional dict mapping class name -> group name, e.g.
+        {"Tui": "Birds", "Cicada": "Insects", "Chainsaw": "Machinery", ...}
+        Any class not found in this dict is placed in an "Other" group.
+    group_order: optional list controlling tab order, e.g.
+        ["Birds", "Frogs", "Insects", "Mammals", "Machinery"]
+        Groups not listed are appended alphabetically after these.
+    """
+    class_groups = class_groups or {}
+    visible = set(annotation_state.get_visible_classes())
 
-    grid = widgets.GridBox(
-        checkboxes,
-        layout=widgets.Layout(
-            grid_template_columns=f"repeat({n_columns}, 1fr)",
-            grid_gap="5px 25px",
-            width="100%"
+    # --- bucket classes into groups ---
+    groups: dict[str, list[str]] = defaultdict(list)
+    for cls in annotation_state.get_all_classes():
+        groups[class_groups.get(cls, "Other")].append(cls)
+    for cls_list in groups.values():
+        cls_list.sort()
+
+    # --- decide display order of the groups/tabs ---
+    if group_order:
+        ordered_groups = [g for g in group_order if g in groups]
+        ordered_groups += sorted(g for g in groups if g not in ordered_groups)
+    else:
+        ordered_groups = sorted(groups.keys())
+
+    # --- build one checkbox grid per group ---
+    checkboxes = []  # flat list, kept for anything downstream that needs all of them
+    tab_children = []
+    for group_name in ordered_groups:
+        group_checkboxes = []
+        for cls in groups[group_name]:
+            cb = widgets.Checkbox(
+                value=cls in visible,
+                description=cls,
+                indent=False,
+                layout=widgets.Layout(width="auto")
+            )
+            checkboxes.append(cb)
+            group_checkboxes.append(cb)
+
+        group_grid = widgets.GridBox(
+            group_checkboxes,
+            layout=widgets.Layout(
+                grid_template_columns=f"repeat({n_columns}, 1fr)",
+                grid_gap="5px 25px",
+                width="100%"
+            )
         )
-    )
+        tab_children.append(group_grid)
+
+    grid = widgets.Tab(children=tab_children)
+    for i, group_name in enumerate(ordered_groups):
+        grid.set_title(i, f"{group_name} ({len(groups[group_name])})")
+
+
 
     # --- Radio buttons ---
     visible = annotation_state.get_visible_classes()
@@ -572,8 +613,9 @@ def create_class_widgets(annotation_state,
     radio_call_type.observe(lambda change: setattr(annotation_state, 'call_type', change["new"]), names="value")
     radio_score.observe(lambda change: setattr(annotation_state, 'score', change["new"]), names="value")
 
+
     # --- Layout for radio buttons ---
-    radio_columns = [
+    radio_columns: list[Widget] = [
         widgets.Box([radio_class], layout=widgets.Layout(width="20%")),
         widgets.Box([radio_sex], layout=widgets.Layout(width="20%")),
         widgets.Box([radio_life_stage], layout=widgets.Layout(width="20%")),
@@ -584,7 +626,8 @@ def create_class_widgets(annotation_state,
     # --- Map display inline (ipympl canvas) ---
     if fastmap is not None:
         canvas_widget = fastmap.fig.canvas
-        radio_columns.append(canvas_widget)
+        if isinstance(canvas_widget, Widget):
+            radio_columns.append(canvas_widget)
 
     # --- Bottom row ---
     bottom_row = widgets.HBox(
