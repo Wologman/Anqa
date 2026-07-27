@@ -13,12 +13,13 @@ The goal for this project is to encourage regional institutions to produce and s
 * **Every animal** sound must get a time-frequency box.  Where the species can not be identified, fall back to a higher taxonomic order.  For example insects should use 47158.
 * **A naming schema** matching the above codes to what ever local scheme is to be used, plus the scientific name
 * **An 'unknown' label** for any wildlife sound that can not be identified.
+* **Original source filename**, start-stop time within, and sampling rate are tracked through subsequent sub sampling
 * **Modularity** - It should be possible to merge any two datasets programatically, whilst keeping the above properties
 * **Open Source** CC-BY licence, where no licence already exists for a given row-item in the metadata
 
 Whilst open-sourcing the training data, regional institutions should also be encouraged to make careful use of their time/date/location metadata to create and hold back independent test sets for model selection and calibration.
 
-By creating models that also predict time-frequency boxes in the same format, we enable efficient data reviewing, model calibration, and continuous improvement of the datasets through human-in-loop review.
+By creating models that also predict time-frequency boxes in the same format, we enable efficient data reviewing, model calibration, and continuous improvement of the datasets through human-in-loop review in a single unified format.
 
 <img src=".//images/anqa_diagram.png" width="900">
 
@@ -33,14 +34,13 @@ The Xeno-Canto and Inaturalist arbitrary length formats have a number of shortco
 
 * It is hard to build strong models from training on the inherently weak-labelling in the Xeno-Canto data.  A large proportion of this data contains false negatives, whilst the training routine has no way to ensure sub-sampling contains sound the expected classes, leading to false positives during training.
 
-Model segment level model predictions also have some shortcommings:
+On the output side, segment level model predictions also have some shortcommings:
 
-* Working with the segment-level data is hard to visualise and inconvenient for deriving meaningful statistical insights for monitoring.
+* Working with the fixed-segment-length data is hard to visualise and inconvenient for deriving meaningful statistical insights for monitoring.
 
 * The training data is incomparable to model predictions, making it hard to perform any meaningful form of model calibration from data in it's short-crop form.
 
-
-The value-proposition here is for regional institutions to use their own experts to create strongly labelled datasets.  Then for the rest of time a world-leading model is just a code-fork away.  This enables the building of local capacity and continuity.
+The value-proposition here is for regional institutions to use their own experts to create and time-frequency box annotated datasets.  Then for the rest of time a world-leading model architecture is just a code-fork away, whilst the training dataset can be continuously reviewed and improved.
 
 ## Proposed Columns
 
