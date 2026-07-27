@@ -13,7 +13,7 @@ The goal for this project is to encourage regional institutions to produce and s
 * **Every animal** sound must get a time-frequency box.  Where the species can not be identified, fall back to a higher taxonomic order.  For example insects should use 47158.
 * **A naming schema** matching the above codes to what ever local scheme is to be used, plus the scientific name
 * **An 'unknown' label** for any wildlife sound that can not be identified.
-* **Original source filename**, start-stop time within, and sampling rate are tracked through subsequent sub sampling
+* **Original source filename**, start-stop time within, and sampling rate are tracked through subsequent chunking or resampling
 * **Modularity** - It should be possible to merge any two datasets programatically, whilst keeping the above properties
 * **Open Source** CC-BY licence, where no licence already exists for a given row-item in the metadata
 
