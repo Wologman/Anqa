@@ -897,14 +897,21 @@ class AnnotationStore:
         self._box_artists.append(rect)
         self._text_artists.append(text)
 
+    def box_artist_at(self, index: int) -> Rectangle:
+        return self._box_artists[index]
+
+    def remove_at(self, index: int):
+        """Remove the annotation at `index`. Returns True if anything was removed."""
+        if not (0 <= index < len(self.boxes)):
+            return False
+        self.boxes.pop(index)
+        self._box_artists.pop(index).remove()
+        self._text_artists.pop(index).remove()
+        return True
+
     def undo(self):
         """Remove the most recently added annotation. Returns True if anything was removed."""
-        if not self.boxes:
-            return False
-        self.boxes.pop()
-        self._box_artists.pop().remove()
-        self._text_artists.pop().remove()
-        return True
+        return self.remove_at(len(self.boxes) - 1)
 
     def clear(self):
         while self._box_artists:
@@ -973,6 +980,10 @@ class SpectrogramAnnotator:
         # --- data and annotations ---
         #self.data: SpectrogramData | None = None
         self.annotations = AnnotationStore()
+        self._current_idx = None
+        self.default_linewidth = 2
+        self.current_linewidth = 4
+
         self._last_box_freq = None  # (ymin_hz, ymax_hz)
         self.band_power = None
 
@@ -1106,7 +1117,9 @@ class SpectrogramAnnotator:
                     self.playhead_power.set_xdata([current_time])
                     if self.playhead_zoom is not None:
                         self.playhead_zoom.set_xdata([current_time])
-                    self.fig.canvas.draw_idle()
+                    if not getattr(self, "_dragging", False):
+                        self.fig.canvas.draw_idle()
+                    #self.fig.canvas.draw_idle()
                     self.fig.canvas.flush_events()
                     break
 
@@ -1115,7 +1128,9 @@ class SpectrogramAnnotator:
                     self.playhead_power.set_xdata([current_time])
                     if self.playhead_zoom is not None:
                         self.playhead_zoom.set_xdata([current_time])
-                    self.fig.canvas.draw_idle()
+                    if not getattr(self, "_dragging", False):
+                        self.fig.canvas.draw_idle()
+                    #self.fig.canvas.draw_idle()
                     self.fig.canvas.flush_events()
                 except Exception:
                     break
@@ -1133,6 +1148,7 @@ class SpectrogramAnnotator:
 
     def _render(self):
         self.annotations.clear()
+        self._current_idx = None
         self.ax_spec.clear()
         self.ax_power.clear()
         #self.centre_dot    = None
@@ -1409,6 +1425,7 @@ class SpectrogramAnnotator:
             )
 
             self.annotations.add(box_dict, rect, text)
+            self._set_current_index(len(self.annotations) - 1)
 
     # ----------------------------
     # Drag preview callbacks
@@ -1466,6 +1483,7 @@ class SpectrogramAnnotator:
 
         return xmin, xmax, ymin_idx, ymax_idx, ymin_hz, ymax_hz
 
+    '''
     def _on_drag_start(self, event):
         if event.button != 1:
             return
@@ -1502,6 +1520,94 @@ class SpectrogramAnnotator:
 
         self.ax_spec.add_patch(self._drag_rect)
         self.fig.canvas.draw_idle()
+    '''
+
+    def _on_drag_start(self, event):
+        if event.button != 1:
+            return
+        self._drag_start = self._event_to_data(event)
+        self._drag_start_screen = (event.x, event.y)
+        self._drag_moved = False
+
+        if self._drag_rect is None:
+            self._drag_rect = Rectangle(
+                (0, 0), 0, 0,
+                edgecolor='lime', facecolor='lime', alpha=0.25,
+                linewidth=2, zorder=15,
+            )
+            self.ax_spec.add_patch(self._drag_rect)
+        self._drag_rect.set_visible(True)
+
+
+    def _on_drag_start(self, event):
+        if event.button != 1:
+            return
+        self._drag_start = self._event_to_data(event)
+        self._drag_start_screen = (event.x, event.y)
+        self._drag_moved = False
+        self._dragging = True
+
+        if self._drag_rect is None:
+            self._drag_rect = Rectangle(
+                (0, 0), 0, 0,
+                edgecolor='lime', facecolor='lime', alpha=0.25,
+                linewidth=2, zorder=15,
+            )
+            self.ax_spec.add_patch(self._drag_rect)
+        self._drag_rect.set_visible(False)
+
+        # snapshot everything EXCEPT the drag rect
+        self.fig.canvas.draw()
+        self._blit_bg = self.fig.canvas.copy_from_bbox(self.ax_spec.bbox)
+        self._drag_rect.set_visible(True)
+
+
+
+
+    def _on_drag_motion(self, event):
+        MIN_FRAME_INTERVAL = 1/15
+        if self._drag_start is None:
+            return
+        now = time.monotonic()
+        if now - getattr(self, "_last_drag_frame", 0) < MIN_FRAME_INTERVAL:
+            return
+        self._last_drag_frame = now
+
+        self._drag_moved = True
+
+        x0, y0 = self._drag_start
+        x1, y1 = self._event_to_data(event)
+        xmin, xmax, ymin_idx, ymax_idx, _, _ = self._snap_box(x0, y0, x1, y1)
+
+        self._drag_rect.set_xy((xmin, ymin_idx))
+        self._drag_rect.set_width(xmax - xmin)
+        self._drag_rect.set_height(ymax_idx - ymin_idx)
+        self.fig.canvas.draw_idle()
+
+
+    def _on_drag_motion(self, event):
+        MIN_FRAME_INTERVAL = 1/15
+        if self._drag_start is None:
+            return
+        now = time.monotonic()
+        if now - getattr(self, "_last_drag_frame", 0) < MIN_FRAME_INTERVAL:
+            return
+        self._last_drag_frame = now
+        self._drag_moved = True
+
+        x0, y0 = self._drag_start
+        x1, y1 = self._event_to_data(event)
+        xmin, xmax, ymin_idx, ymax_idx, _, _ = self._snap_box(x0, y0, x1, y1)
+
+        self._drag_rect.set_xy((xmin, ymin_idx))
+        self._drag_rect.set_width(xmax - xmin)
+        self._drag_rect.set_height(ymax_idx - ymin_idx)
+
+        self.fig.canvas.restore_region(self._blit_bg)
+        self.ax_spec.draw_artist(self._drag_rect)
+        self.fig.canvas.blit(self.ax_spec.bbox)
+        self.fig.canvas.flush_events()
+    
 
     def _update_band_power(self, ymin_hz, ymax_hz):
         """
@@ -1528,7 +1634,7 @@ class SpectrogramAnnotator:
 
 
     def _on_drag_release(self, event):
-
+        self._dragging = False
         if self._drag_start is None:
             self._drag_moved = False
             self._drag_start = None
@@ -1628,6 +1734,7 @@ class SpectrogramAnnotator:
         )
 
         self.annotations.add(box_dict, rect, text)
+        self._set_current_index(len(self.annotations) - 1)
 
         self._drag_start = None
         self._drag_moved = False
@@ -1636,7 +1743,10 @@ class SpectrogramAnnotator:
         self._last_box_time = xmax - xmin
         self._last_box_rows = ymax_idx - ymin_idx
 
-        self.fig.canvas.draw_idle()
+        #self.fig.canvas.draw_idle()
+        self._dragging = False
+        self.fig.canvas.draw()          # full synchronous render, not draw_idle()
+        self.fig.canvas.flush_events()  # force it out over the comm now
 
 
     def _propagate_boxes_from_power(self):
@@ -1740,7 +1850,8 @@ class SpectrogramAnnotator:
                 zorder=11,
             )
             self.annotations.undo()
-            self.annotations.add(box_dict, rect, text)   
+            self.annotations.add(box_dict, rect, text)
+            self._set_current_index(len(self.annotations) - 1)
 
         self.fig.canvas.draw_idle()
 
@@ -1876,6 +1987,7 @@ class SpectrogramAnnotator:
             )
 
             self.annotations.add(box_dict, rect, text)
+            self._set_current_index(len(self.annotations) - 1)
 
         self.fig.canvas.draw_idle()
 
@@ -1953,8 +2065,13 @@ class SpectrogramAnnotator:
 
         # --- store annotation ---
         self.annotations.add(box_dict, rect, text)
+        self._set_current_index(len(self.annotations) - 1)
 
         self.fig.canvas.draw_idle()
+
+
+
+
 
 
     # ----------------------------
@@ -1985,10 +2102,21 @@ class SpectrogramAnnotator:
         print(f"Some key was pressed: {event.key}")
         if event.key == 'd':
             self.annotations.clear()
+            self._current_idx = None
             self.fig.canvas.draw_idle()
         elif event.key == 'u':
-            if self.annotations.undo():
+            if self._current_idx is not None:
+                self.annotations.remove_at(self._current_idx)
+                n = len(self.annotations)
+                self._current_idx = min(self._current_idx, n - 1) if n else None
+                self._refresh_box_linewidths()
                 self.fig.canvas.draw_idle()
+        elif event.key == 'left':
+            if self._current_idx is not None:
+                self._set_current_index(self._current_idx - 1)
+        elif event.key == 'right':
+            if self._current_idx is not None:
+                self._set_current_index(self._current_idx + 1)
         elif event.key == 'b':
             self._propagate_boxes_from_power()
             self.fig.canvas.draw_idle()
@@ -1996,9 +2124,28 @@ class SpectrogramAnnotator:
             self._propagate_boxes_from_template()
             self.fig.canvas.draw_idle()
 
+
+
     # ----------------------------
     # Public utilities
     # ----------------------------
+
+    def _set_current_index(self, idx):
+        n = len(self.annotations)
+        if n == 0:
+            self._current_idx = None
+            return
+        self._current_idx = max(0, min(idx, n - 1))
+        self._refresh_box_linewidths()
+
+    def _refresh_box_linewidths(self):
+        for i in range(len(self.annotations)):
+            rect = self.annotations.box_artist_at(i)
+            rect.set_linewidth(
+                self.current_linewidth if i == self._current_idx else self.default_linewidth
+            )
+        self.fig.canvas.draw_idle()
+
 
     def clear_annotations(self):
         self.annotations.clear()
