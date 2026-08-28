@@ -48,17 +48,27 @@ class ConfigEditor(tk.Tk):
         self._build_path_row("naming_csv", "Bird names CSV", is_dir=False)
         self._build_text_row("author", "Author | Name if first to annotate")
         self._build_text_row("reviewer", "Reviewer | Leave blank unless reviewing")
-        #self._build_text_row("map_extents", "Map region | Choose from preset optioins")
         self._build_text_row("display_width", "Display Width | Adjust for your screen size")
         self._build_dropdown_row("map_extents", "Map region",
                           options=list(self.cfg.get("geographic_extents", {}).keys()))
-
 
         btn_frame = tk.Frame(self)
         btn_frame.grid(row=99, column=0, columnspan=3, pady=12)
         tk.Button(btn_frame, text="Save settings and run", command=self.on_save, width=16).pack(side="left", padx=6)
         tk.Button(btn_frame, text="Cancel", command=self.destroy, width=10).pack(side="left", padx=6)
 
+        help_text = (
+                    "Fill in the folders and settings above, then click 'Save settings and run' to run the annotation notebook.\n\n"
+                    "To set up a new region for the basemap you can manually edit config.yaml, or you can do it interactively with the explore_data notebook"
+                    )
+        tk.Label(
+            self,
+            text=help_text,
+            justify="left",
+            wraplength=420,
+            fg="gray30",
+        ).grid(row=98, column=0, columnspan=3, sticky="w", padx=8, pady=(12, 0))
+        
 
     def _build_dropdown_row(self, key, label, options):
         row = len(self.vars)
@@ -85,6 +95,7 @@ class ConfigEditor(tk.Tk):
         var = tk.StringVar(value="" if self.cfg[key] is None else str(self.cfg[key]))
         tk.Entry(self, textvariable=var, width=45).grid(row=row, column=1, padx=4)
         self.vars[key] = var
+
 
     def _build_path_row(self, key, label, is_dir):
         row = self._row()

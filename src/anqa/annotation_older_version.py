@@ -16,6 +16,7 @@ import time
 import matplotlib.gridspec as gridspec
 import threading
 import contextily as cx
+import xyzservices.providers as xyz
 from scipy.signal import butter, filtfilt, resample_poly, find_peaks
 from math import gcd
 from threading import Timer
@@ -25,8 +26,6 @@ from dataclasses import dataclass
 from typing import cast
 import sounddevice as sd
 from collections import defaultdict
-from pyproj import Transformer
-import matplotlib.image as mpimg
 
 # ---------------------------------------------------------------------------
 # Schema definitions
@@ -311,7 +310,7 @@ class STFTMaker():
                                 )
         return power, times, freqs
 
-
+import xyzservices.providers as xyz
 
 class FastMap:
     '''Uses lat and long from the file metadata to place the location on a map'''
@@ -324,21 +323,18 @@ class FastMap:
         'min_latitude': -41.5
     }
 
-    # Circumference of EPSG:3857, in metres — used to unwrap extents that cross the antimeridian
-    _MERC_FULL_WIDTH = 2 * 20037508.342789244
-
     def __init__(
         self,
-        basemap: Path | None = None,
-        provider: dict = cx.providers.Esri.WorldImagery,  # type: ignore[attr-defined]
-        figsize: tuple = (2.5, 2.5),
+        #provider = xyz.query_name("OpenStreetMap.Mapnik"),  # type: ignore[attr-defined]
+        #provider=xyz.OpenStreetMap.Mapnik,   # pylint: disable=no-member
+        provider: dict = cx.providers.OpenStreetMap.Mapnik,  # type: ignore[attr-defined]
+        figsize: tuple =(3, 3),
         ax=None,
-        map_extents=None,  # WGS84
+        map_extents=None, # WGS84
         web_mercator_extents=None  # e.g. {'min_x': ..., 'max_x': ..., 'min_y': ..., 'max_y': ...}
-    ):
+        ):
 
         self.provider = provider
-        self.basemap_path = basemap
 
         if web_mercator_extents is not None:
             # User supplied Web Mercator directly — use as-is
@@ -351,20 +347,13 @@ class FastMap:
             self.max_long, self.max_lat = self._webmercator_to_wgs84(self.max_x, self.max_y)
         else:
             # Use WGS84 extents (default path)
-            self.extents = map_extents if map_extents is not None else self.default_extents
-            self.min_long = self.extents['min_longitude']
-            self.max_long = self.extents['max_longitude']
-            self.min_lat = self.extents['min_latitude']
-            self.max_lat = self.extents['max_latitude']
+            extents = map_extents if map_extents is not None else self.default_extents
+            self.min_long = extents['min_longitude']
+            self.max_long = extents['max_longitude']
+            self.min_lat  = extents['min_latitude']
+            self.max_lat  = extents['max_latitude']
             self.min_x, self.min_y = self._wgs84_to_webmercator(self.min_long, self.min_lat)
             self.max_x, self.max_y = self._wgs84_to_webmercator(self.max_long, self.max_lat)
-
-        # A min_longitude greater than max_longitude means the extent wraps across
-        # the antimeridian (e.g. min=162.41, max=-177.41 spanning the dateline).
-        # Computed once here so __init__, _draw_basemap, and update() all agree.
-        self.crosses_dateline = self.min_long > self.max_long
-        if self.crosses_dateline:
-            self.max_x += self._MERC_FULL_WIDTH
 
         self._interactive_state = plt.isinteractive()
         plt.ioff()
@@ -385,7 +374,7 @@ class FastMap:
         self.ax.set_yticks([])
         self.ax.set_aspect('equal', adjustable='box')
 
-        self._draw_basemap()
+        cx.add_basemap(self.ax, source=self.provider, zoom='auto')
 
         self.ax.plot(
             [self.min_x, self.max_x, self.max_x, self.min_x, self.min_x],
@@ -396,35 +385,7 @@ class FastMap:
         self.marker, = self.ax.plot([], [], 'ro', markersize=4)
 
     # ------------------------------------------------------------------ #
-    #  Drawing                                                            #
-    # ------------------------------------------------------------------ #
-
-    def _draw_basemap(self):
-        """
-        Draw the basemap on self.ax from a cached image at self.basemap if
-        possible, falling back to a live contextily fetch otherwise.
-        """
-        img = None
-        if self.basemap_path is not None:
-            try:
-                img = mpimg.imread(self.basemap_path)
-            except (FileNotFoundError, OSError, ValueError):
-                img = None  # missing, unreadable, or corrupt — fall through to live fetch
-
-        if img is not None:
-            to_3857 = Transformer.from_crs("EPSG:4326", "EPSG:3857", always_xy=True)
-
-            xmin, ymin = to_3857.transform(self.extents['min_longitude'], self.extents['min_latitude'])
-            xmax, ymax = to_3857.transform(self.extents['max_longitude'], self.extents['max_latitude'])
-            if self.crosses_dateline:
-                xmax += self._MERC_FULL_WIDTH
-
-            self.ax.imshow(img, extent=(xmin, xmax, ymin, ymax), origin='upper', zorder=1)
-        else:
-            cx.add_basemap(self.ax, source=self.provider, zoom='auto')
-
-    # ------------------------------------------------------------------ #
-    #  Coordinate helpers                                                #
+    #  Coordinate helpers                                                  #
     # ------------------------------------------------------------------ #
 
     @staticmethod
@@ -442,22 +403,15 @@ class FastMap:
         return lon, lat
 
     # ------------------------------------------------------------------ #
-    #  Public interface                                                  #
+    #  Public interface                                                    #
     # ------------------------------------------------------------------ #
 
     def update(self, lat=None, lon=None):
-        if lat is None or lon is None:
-            self.marker.set_data([], [])
-            self.fig.canvas.draw_idle()
-            return
-
-        lat_ok = self.min_lat <= lat <= self.max_lat
-        if self.crosses_dateline:
-            lon_ok = lon >= self.min_long or lon <= self.max_long
-        else:
-            lon_ok = self.min_long <= lon <= self.max_long
-
-        if lat_ok and lon_ok:
+        if (
+            lat is not None and lon is not None
+            and self.min_lat <= lat <= self.max_lat
+            and self.min_long <= lon <= self.max_long
+        ):
             x, y = self._wgs84_to_webmercator(lon, lat)
             self.marker.set_data([x], [y])
         else:
@@ -526,6 +480,8 @@ class AnnotationState:
 
     def get_all_classes(self):
         return self.all_classes
+
+
 
 
 def create_class_widgets(annotation_state,
@@ -1020,7 +976,6 @@ class SpectrogramAnnotator:
         self.min_drag_rows = min_drag_rows        # spectrogram rows
         self.min_separation = min_separation
         self.similarness_threshold = similarness_threshold
-        self._canvas_lock = threading.Lock()
 
         # --- data and annotations ---
         #self.data: SpectrogramData | None = None
@@ -1040,18 +995,21 @@ class SpectrogramAnnotator:
         self.zoom_rect = None
 
         # --- playhead artist handles ---
+        #self.centre_dot = None
         self.playhead_power = None
         self.playhead_spec = None
         self.playhead_zoom = None
 
         # --- file state ---
         self.file_loaded = False
+        #self.filepath = None
+        #self.meta_row = None
+        #self.label_rows = None
 
         # --- build figure ---
         self._interactive_state = plt.isinteractive()
         plt.ioff()
         self.fig = plt.figure(figsize=self.plot_size)
-        self.fig.canvas.manager.set_window_title('')
 
         gs = gridspec.GridSpec(
             2, 2,
@@ -1159,9 +1117,7 @@ class SpectrogramAnnotator:
                     self.playhead_power.set_xdata([current_time])
                     if self.playhead_zoom is not None:
                         self.playhead_zoom.set_xdata([current_time])
-                    if not getattr(self, "_dragging", False):
-                        self.fig.canvas.draw_idle()
-                    #self.fig.canvas.draw_idle()
+                    self.fig.canvas.draw_idle()
                     self.fig.canvas.flush_events()
                     break
 
@@ -1170,40 +1126,11 @@ class SpectrogramAnnotator:
                     self.playhead_power.set_xdata([current_time])
                     if self.playhead_zoom is not None:
                         self.playhead_zoom.set_xdata([current_time])
-                    if not getattr(self, "_dragging", False):
-                        self.fig.canvas.draw_idle()
-                    #self.fig.canvas.draw_idle()
+                    self.fig.canvas.draw_idle()
                     self.fig.canvas.flush_events()
                 except Exception:
                     break
 
-                time.sleep(interval)
-
-        def update_loop(interval=interval):
-            while self._playhead_gen == my_gen:
-                if (self.playhead_spec is None or self.playhead_power is None or self.fig is None):
-                    break
-
-                elapsed      = time.time() - self._play_start_wall
-                current_time = self._play_start_audio + elapsed
-                done = current_time > self.data.duration_seconds
-                if done:
-                    current_time = self.data.duration_seconds
-
-                try:
-                    with self._canvas_lock:
-                        self.playhead_spec.set_xdata([current_time])
-                        self.playhead_power.set_xdata([current_time])
-                        if self.playhead_zoom is not None:
-                            self.playhead_zoom.set_xdata([current_time])
-                        if not getattr(self, "_dragging", False):
-                            self.fig.canvas.draw_idle()
-                            self.fig.canvas.flush_events()
-                except Exception:
-                    break
-
-                if done:
-                    break
                 time.sleep(interval)
 
         threading.Thread(target=update_loop, daemon=True).start()
@@ -1225,6 +1152,7 @@ class SpectrogramAnnotator:
         self.playhead_spec  = None
         self.zoom_rect      = None
         
+
         d = self.data
         t_power  = np.linspace(0, d.duration_seconds, len(d.power))
         n_rows, n_cols = d.mel_spec_db.shape
@@ -1551,6 +1479,44 @@ class SpectrogramAnnotator:
 
         return xmin, xmax, ymin_idx, ymax_idx, ymin_hz, ymax_hz
 
+    '''
+    def _on_drag_start(self, event):
+        if event.button != 1:
+            return
+        self._drag_start = self._event_to_data(event)
+        self._drag_start_screen = (event.x, event.y)  # store screen coords too
+        self._drag_moved = False
+
+
+    def _on_drag_motion(self, event):
+
+        if self._drag_start is None:
+            return
+
+        self._drag_moved = True
+
+        x0, y0 = self._drag_start
+        x1, y1 = self._event_to_data(event)
+
+        xmin, xmax, ymin_idx, ymax_idx, _, _ = self._snap_box(x0, y0, x1, y1)
+
+        if self._drag_rect is not None:
+            self._drag_rect.remove()
+
+        self._drag_rect = Rectangle(
+                                    (xmin, ymin_idx),
+                                    xmax - xmin,
+                                    ymax_idx - ymin_idx,
+                                    edgecolor='lime',
+                                    facecolor='lime',
+                                    alpha=0.25,
+                                    linewidth=2,
+                                    zorder=15,
+                                    )
+
+        self.ax_spec.add_patch(self._drag_rect)
+        self.fig.canvas.draw_idle()
+    '''
 
     def _on_drag_start(self, event):
         if event.button != 1:
@@ -1558,7 +1524,6 @@ class SpectrogramAnnotator:
         self._drag_start = self._event_to_data(event)
         self._drag_start_screen = (event.x, event.y)
         self._drag_moved = False
-        self._dragging = True
 
         if self._drag_rect is None:
             self._drag_rect = Rectangle(
@@ -1567,23 +1532,18 @@ class SpectrogramAnnotator:
                 linewidth=2, zorder=15,
             )
             self.ax_spec.add_patch(self._drag_rect)
-        self._drag_rect.set_visible(False)
-
-        # snapshot everything EXCEPT the drag rect
-        with self._canvas_lock:
-            self.fig.canvas.draw()
-            self._blit_bg = self.fig.canvas.copy_from_bbox(self.ax_spec.bbox)
-            self._drag_rect.set_visible(True)
+        self._drag_rect.set_visible(True)
 
 
     def _on_drag_motion(self, event):
-        MIN_FRAME_INTERVAL = 1/15
+        MIN_FRAME_INTERVAL = 1/60
         if self._drag_start is None:
             return
         now = time.monotonic()
         if now - getattr(self, "_last_drag_frame", 0) < MIN_FRAME_INTERVAL:
             return
         self._last_drag_frame = now
+
         self._drag_moved = True
 
         x0, y0 = self._drag_start
@@ -1593,13 +1553,7 @@ class SpectrogramAnnotator:
         self._drag_rect.set_xy((xmin, ymin_idx))
         self._drag_rect.set_width(xmax - xmin)
         self._drag_rect.set_height(ymax_idx - ymin_idx)
-
-        with self._canvas_lock:
-            self.fig.canvas.restore_region(self._blit_bg)
-            self.ax_spec.draw_artist(self._drag_rect)
-            self.fig.canvas.blit(self.ax_spec.bbox)
-            self.fig.canvas.flush_events()
-    
+        self.fig.canvas.draw_idle()
 
     def _update_band_power(self, ymin_hz, ymax_hz):
         """
@@ -1626,7 +1580,7 @@ class SpectrogramAnnotator:
 
 
     def _on_drag_release(self, event):
-        self._dragging = False
+
         if self._drag_start is None:
             self._drag_moved = False
             self._drag_start = None
@@ -1735,11 +1689,7 @@ class SpectrogramAnnotator:
         self._last_box_time = xmax - xmin
         self._last_box_rows = ymax_idx - ymin_idx
 
-        #self.fig.canvas.draw_idle()
-        self._dragging = False
-        with self._canvas_lock:
-            self.fig.canvas.draw()          # full synchronous render, not draw_idle()
-            self.fig.canvas.flush_events()  # force it out over the comm now
+        self.fig.canvas.draw_idle()
 
 
     def _propagate_boxes_from_power(self):
@@ -2059,7 +2009,13 @@ class SpectrogramAnnotator:
         # --- store annotation ---
         self.annotations.add(box_dict, rect, text)
         self._set_current_index(len(self.annotations) - 1)
+
         self.fig.canvas.draw_idle()
+
+
+
+
+
 
     # ----------------------------
     # Click / keypress callbacks
@@ -2110,6 +2066,7 @@ class SpectrogramAnnotator:
         elif event.key == 't':
             self._propagate_boxes_from_template()
             self.fig.canvas.draw_idle()
+
 
 
     # ----------------------------
