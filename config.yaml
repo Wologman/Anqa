@@ -1,16 +1,17 @@
-source_dataset_path: C:/Users/ollyp/OneDrive/Desktop/anqa/data/8kHz_source
-reviewed_data_destn: C:/Users/ollyp/OneDrive/Desktop/anqa/data/8khz_reviewed
-naming_csv: C:/Users/ollyp/OneDrive/Desktop/anqa/data/bird_names/bird_names.csv
+source_dataset_path: C:/Users/ollyp/OneDrive/Desktop/anqa/data/demo_source
+reviewed_data_destn: C:/Users/ollyp/OneDrive/Desktop/anqa/data/demo_reviewed
+naming_csv: C:/Users/ollyp/OneDrive/Desktop/anqa/data/bird_names/bird_names_10_8_26.csv
 author: Olly
 reviewer: null
 map_extents: new_zealand
-display_width: 16
+display_width: 15
+region: new_zealand
 geographic_extents:
   new_zealand:
-    min_longitude: 166
-    max_longitude: 179
-    min_latitude: -49
-    max_latitude: -34
+    min_latitude: -49.0
+    max_latitude: -34.0
+    min_longitude: 162.41
+    max_longitude: -177.41
   south_america:
     min_longitude: -82.0
     max_longitude: -34.0

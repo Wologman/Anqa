@@ -1,6 +1,8 @@
 @echo off
 cd /d "%~dp0"
 
+set "PROJECT_DIR=%~dp0project"
+
 REM --- Check uv is installed, install via winget if missing ---
 where uv >nul 2>nul
 if errorlevel 1 (
@@ -28,17 +30,17 @@ if errorlevel 1 (
 )
 
 REM --- Build the environment on first run ---
-if not exist ".venv" (
+if not exist "%PROJECT_DIR%\.venv" (
     echo First time setup - this may take a few minutes...
     echo.
-    uv sync --extra notebook
+    uv sync --directory "%PROJECT_DIR%" --extra notebook
     if errorlevel 1 (
         echo.
         echo Setup failed. Please contact Olly with the error above.
         pause
         exit /b 1
     )
-    uv run python -m ipykernel install --user --name python3 --display-name "Python (anqa)"
+    uv run --directory "%PROJECT_DIR%" python -m ipykernel install --user --name python3 --display-name "Python (anqa)"
     echo.
     echo Setup complete!
     echo.
@@ -49,6 +51,6 @@ echo A browser window should open automatically.
 echo Keep this window open while you work - closing it will stop the tool.
 echo.
 
-uv run python src/anqa/config_editor.py
-uv run voila --TagRemovePreprocessor.remove_cell_tags='{"hide"}' notebooks/annotation.ipynb
+uv run --directory "%PROJECT_DIR%" python src/anqa/config_editor.py
+uv run --directory "%PROJECT_DIR%" voila --TagRemovePreprocessor.remove_cell_tags='{"hide-output"}' notebooks/annotation.ipynb
 pause
