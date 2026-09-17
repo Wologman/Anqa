@@ -363,8 +363,8 @@ class FastMap:
         # the antimeridian (e.g. min=162.41, max=-177.41 spanning the dateline).
         # Computed once here so __init__, _draw_basemap, and update() all agree.
         self.crosses_dateline = self.min_long > self.max_long
-        if self.crosses_dateline:
-            self.max_x += self._MERC_FULL_WIDTH
+        #if self.crosses_dateline:
+        #    self.max_x += self._MERC_FULL_WIDTH
 
         self._interactive_state = plt.isinteractive()
         plt.ioff()
@@ -411,15 +411,20 @@ class FastMap:
             except (FileNotFoundError, OSError, ValueError):
                 img = None  # missing, unreadable, or corrupt — fall through to live fetch
 
+        #if img is not None:
+        #    to_3857 = Transformer.from_crs("EPSG:4326", "EPSG:3857", always_xy=True)
+
+        #    xmin, ymin = to_3857.transform(self.extents['min_longitude'], self.extents['min_latitude'])
+        #    xmax, ymax = to_3857.transform(self.extents['max_longitude'], self.extents['max_latitude'])
+        #    if self.crosses_dateline:
+        #        xmax += self._MERC_FULL_WIDTH
         if img is not None:
-            to_3857 = Transformer.from_crs("EPSG:4326", "EPSG:3857", always_xy=True)
-
-            xmin, ymin = to_3857.transform(self.extents['min_longitude'], self.extents['min_latitude'])
-            xmax, ymax = to_3857.transform(self.extents['max_longitude'], self.extents['max_latitude'])
-            if self.crosses_dateline:
-                xmax += self._MERC_FULL_WIDTH
-
+            xmin, ymin = self._wgs84_to_webmercator(self.extents['min_longitude'], self.extents['min_latitude'])
+            xmax, ymax = self._wgs84_to_webmercator(self.extents['max_longitude'], self.extents['max_latitude'])
             self.ax.imshow(img, extent=(xmin, xmax, ymin, ymax), origin='upper', zorder=1)
+        
+
+            #self.ax.imshow(img, extent=(xmin, xmax, ymin, ymax), origin='upper', zorder=1)
         else:
             cx.add_basemap(self.ax, source=self.provider, zoom='auto')
 
@@ -427,9 +432,10 @@ class FastMap:
     #  Coordinate helpers                                                #
     # ------------------------------------------------------------------ #
 
-    @staticmethod
-    def _wgs84_to_webmercator(lon, lat):
+    def _wgs84_to_webmercator(self, lon, lat):
         """Convert WGS84 degrees to Web Mercator (EPSG:3857) metres."""
+        if lon < self.min_long:
+            lon += 360
         x = math.radians(lon) * 6378137.0
         y = math.log(math.tan(math.pi / 4 + math.radians(lat) / 2)) * 6378137.0
         return x, y
@@ -1051,7 +1057,7 @@ class SpectrogramAnnotator:
         self._interactive_state = plt.isinteractive()
         plt.ioff()
         self.fig = plt.figure(figsize=self.plot_size)
-        self.fig.canvas.manager.set_window_title('')
+        self.fig.canvas.manager.set_window_title('') # type: ignore[union-attr]
 
         gs = gridspec.GridSpec(
             2, 2,
@@ -1140,44 +1146,6 @@ class SpectrogramAnnotator:
 
         self._play_start_wall  = time.time()
         self._play_start_audio = start_time
-
-        def update_loop(interval=interval):
-            while self._playhead_gen == my_gen:
-                if (
-                    self.playhead_spec is None
-                    or self.playhead_power is None
-                    or self.fig is None
-                ):
-                    break
-
-                elapsed      = time.time() - self._play_start_wall
-                current_time = self._play_start_audio + elapsed
-
-                if current_time > self.data.duration_seconds:
-                    current_time = self.data.duration_seconds
-                    self.playhead_spec.set_xdata([current_time])
-                    self.playhead_power.set_xdata([current_time])
-                    if self.playhead_zoom is not None:
-                        self.playhead_zoom.set_xdata([current_time])
-                    if not getattr(self, "_dragging", False):
-                        self.fig.canvas.draw_idle()
-                    #self.fig.canvas.draw_idle()
-                    self.fig.canvas.flush_events()
-                    break
-
-                try:
-                    self.playhead_spec.set_xdata([current_time])
-                    self.playhead_power.set_xdata([current_time])
-                    if self.playhead_zoom is not None:
-                        self.playhead_zoom.set_xdata([current_time])
-                    if not getattr(self, "_dragging", False):
-                        self.fig.canvas.draw_idle()
-                    #self.fig.canvas.draw_idle()
-                    self.fig.canvas.flush_events()
-                except Exception:
-                    break
-
-                time.sleep(interval)
 
         def update_loop(interval=interval):
             while self._playhead_gen == my_gen:
@@ -1323,6 +1291,7 @@ class SpectrogramAnnotator:
 
     def _render_zoom(self):
         self.ax_side.clear()
+        half_width = self.zoom_window_width / 2
 
         self.playhead_zoom = self.ax_side.axvline(
             self.t_marker, color='cyan', linewidth=1.5, alpha=0.9, zorder=30
@@ -1349,11 +1318,12 @@ class SpectrogramAnnotator:
         # --------------------------------------------------
         height = r1 - r0
         y0     = r0
+        
 
         
         if self.zoom_rect is None:
             self.zoom_rect = Rectangle(
-                                        (self.t_marker, y0),
+                                        (self.t_marker - half_width, y0),
                                         self.zoom_window_width,
                                         height,
                                         edgecolor='white',
@@ -1364,7 +1334,7 @@ class SpectrogramAnnotator:
                                         )
             self.ax_spec.add_patch(self.zoom_rect)
         else:
-            self.zoom_rect.set_x(self.t_marker)
+            self.zoom_rect.set_x(self.t_marker - half_width)
             self.zoom_rect.set_y(y0)
             self.zoom_rect.set_width(self.zoom_window_width)
             self.zoom_rect.set_height(height)
@@ -1374,7 +1344,7 @@ class SpectrogramAnnotator:
         # --------------------------------------------------
         zoomed_wav, new_sr = zoom_in_on_wav(
                                             self.data.wav,
-                                            self.t_marker,
+                                            self.t_marker - half_width,
                                             f_min_hz,
                                             f_max_hz,
                                             self.data.time_axis,
@@ -1402,7 +1372,7 @@ class SpectrogramAnnotator:
         spec_norm    = (spec_clipped - vmin_global) / (vmax_global - vmin_global)      
         spec_vis     = spec_norm ** 0.6
 
-        extent = (time_axis[0]  + self.t_marker, time_axis[-1] + self.t_marker,
+        extent = (time_axis[0]  + self.t_marker - half_width, time_axis[-1] + self.t_marker - half_width,
                   freqs_sliced[0],  freqs_sliced[-1])
 
         self.ax_side.imshow(
@@ -1416,6 +1386,9 @@ class SpectrogramAnnotator:
         )
         self.ax_side.set_xlim(extent[0], extent[1])
         self.ax_side.set_ylim(freqs_sliced[0], freqs_sliced[-1])
+
+        self.ax_side.axhline(y=((freqs_sliced[0] +freqs_sliced[-1]) / 2), color='r', linestyle='--')
+        self.ax_side.axvline(x=((extent[0] + extent[1]) / 2), color='r', linestyle='--')
 
         # Force top and bottom ticks to exactly match the zoom box bounds
         yticks = self.ax_side.get_yticks()
@@ -1572,7 +1545,7 @@ class SpectrogramAnnotator:
         # snapshot everything EXCEPT the drag rect
         with self._canvas_lock:
             self.fig.canvas.draw()
-            self._blit_bg = self.fig.canvas.copy_from_bbox(self.ax_spec.bbox)
+            self._blit_bg = self.fig.canvas.copy_from_bbox(self.ax_spec.bbox) # type: ignore
             self._drag_rect.set_visible(True)
 
 
@@ -1590,13 +1563,13 @@ class SpectrogramAnnotator:
         x1, y1 = self._event_to_data(event)
         xmin, xmax, ymin_idx, ymax_idx, _, _ = self._snap_box(x0, y0, x1, y1)
 
-        self._drag_rect.set_xy((xmin, ymin_idx))
-        self._drag_rect.set_width(xmax - xmin)
-        self._drag_rect.set_height(ymax_idx - ymin_idx)
+        self._drag_rect.set_xy((xmin, ymin_idx)) # type: ignore
+        self._drag_rect.set_width(xmax - xmin) # type: ignore
+        self._drag_rect.set_height(ymax_idx - ymin_idx) # type: ignore
 
         with self._canvas_lock:
-            self.fig.canvas.restore_region(self._blit_bg)
-            self.ax_spec.draw_artist(self._drag_rect)
+            self.fig.canvas.restore_region(self._blit_bg) # type: ignore
+            self.ax_spec.draw_artist(self._drag_rect) # type: ignore
             self.fig.canvas.blit(self.ax_spec.bbox)
             self.fig.canvas.flush_events()
     
@@ -2066,21 +2039,25 @@ class SpectrogramAnnotator:
     # ----------------------------
 
     def _on_click(self, event):
+        # This is the right-click to set a zoom window to a new location
         if event.button == 3:  # or len(self.annotations) > 0:
             if event.inaxes != self.ax_spec:
                 return
 
-            max_marker = self.data.duration_seconds - self.zoom_window_width
-            t_marker   = np.clip(event.xdata, 0, max_marker)
-
             half_height = self.zoom_window_height * self.n_mels / 2
+            half_width = self.zoom_window_width / 2
+
+            max_marker = self.data.duration_seconds - half_width
+            t_marker   = np.clip(event.xdata, half_width, max_marker)
+
+            
             f_marker    = np.clip(event.ydata, half_height, self.n_mels - half_height)
 
             self.t_marker = t_marker
             self.f_marker = f_marker
 
             self.centre_dot.set_data([self.t_marker], [self.f_marker])
-            self._play_audio(start_time=self.t_marker)
+            self._play_audio(start_time=self.t_marker - half_width)
             self._render_zoom()
             self.fig.canvas.draw_idle()
 

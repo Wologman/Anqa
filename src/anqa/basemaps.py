@@ -1,27 +1,14 @@
 """
 Fetch and cache cropped basemap images for named geographic regions.
- 
-Usage (from a notebook):
- 
-    import contextily as cx
-    from region_maps import get_region_map
- 
-    extents = {"min_longitude": 166, "max_longitude": 179,
-               "min_latitude": -49,  "max_latitude": -34,}
- 
-    path = get_region_map("New_Zealand", cx.providers.OpenStreetMap.Mapnik, extents)
- 
-Requires:
-    pip install contextily matplotlib pyproj
-    (or: uv add contextily matplotlib pyproj)
 """
  
 from pathlib import Path
+import pandas as pd
 import contextily as cx
 import matplotlib.pyplot as plt
-from pyproj import Transformer
+from pyproj import CRS, Transformer
 import ipywidgets as widgets
-from IPython.display import display #, HTML
+from IPython.display import display
 import matplotlib.image as mpimg
 import math
 import numpy as np
@@ -145,11 +132,27 @@ def _square_mercator_extents(xmin, ymin, xmax, ymax):
     return (cx_ - side / 2, cy_ - side / 2, cx_ + side / 2, cy_ + side / 2)
 
 
-def plot_points_on_cx_basemap(df, extents, lat_col='latitude', lon_col='longitude',
-                            basemap_source=None, figsize=(8, 8), point_kwargs=None,
-                            zoom_factor=1.5, pan_fraction=0.25):
-    to_3857 = Transformer.from_crs("EPSG:4326", "EPSG:3857", always_xy=True)
-    to_4326 = Transformer.from_crs("EPSG:3857", "EPSG:4326", always_xy=True)
+
+def plot_points_on_cx_basemap(df: pd.DataFrame,
+                              extents: dict,
+                              lat_col: str='latitude',
+                              lon_col: str='longitude',
+                              basemap_source=None,
+                              figsize=(8, 8),
+                              zoom_factor=1.5,
+                              pan_fraction=0.25
+                              ):
+
+    # Standard Web Mercator, but without the longitude-wrapping step
+    merc_over = CRS.from_proj4(
+        "+proj=merc +a=6378137 +b=6378137 +lat_ts=0 +lon_0=0 "
+        "+x_0=0 +y_0=0 +k=1 +units=m +nadgrids=@null +wktext +no_defs +over"
+    )
+
+    to_3857 = Transformer.from_crs("EPSG:4326", merc_over, always_xy=True)
+    to_4326 = Transformer.from_crs(merc_over, "EPSG:4326", always_xy=True)
+
+
 
     crosses_dateline = extents['min_longitude'] > extents['max_longitude']
 
@@ -157,7 +160,8 @@ def plot_points_on_cx_basemap(df, extents, lat_col='latitude', lon_col='longitud
     # dateline, any point whose lon falls "east" of it (i.e. less than the
     # region's western edge) actually continues the view to the right, so
     # give it +360 to sit in the same continuous coordinate space.
-    lons = df[lon_col].values.astype(float).copy()
+    
+    lons = df[lon_col].to_numpy(dtype=float).copy()
     if crosses_dateline:
         lons = np.where(lons < extents['min_longitude'], lons + 360, lons)
         max_lon_cont = extents['max_longitude'] + 360
@@ -167,19 +171,17 @@ def plot_points_on_cx_basemap(df, extents, lat_col='latitude', lon_col='longitud
     x, y = to_3857.transform(lons, df[lat_col].values)
     xmin, ymin = to_3857.transform(extents['min_longitude'], extents['min_latitude'])
     xmax, ymax = to_3857.transform(max_lon_cont, extents['max_latitude'])
+    
     xmin, ymin, xmax, ymax = _square_mercator_extents(xmin, ymin, xmax, ymax)
 
     with plt.ioff():
         fig, ax = plt.subplots(figsize=figsize)
-        fig.canvas.toolbar_visible = False   # pan/zoom/save icons above the plot
-        fig.canvas.header_visible = False    # "Figure N" title above the plot
-        fig.canvas.footer_visible = False    # hover coordinates below the plot
-        fig.canvas.resizable = False         # drag-to-resize handle (optional)
+        fig.canvas.toolbar_visible = False  # type: ignore[attr-defined]  pan/zoom/save icons above the plot
+        fig.canvas.header_visible = False    # type: ignore[attr-defined] "Figure N" title above the plot
+        fig.canvas.footer_visible = False    # type: ignore[attr-defined] hover coordinates below the plot
+        fig.canvas.resizable = False         # type: ignore[attr-defined] drag-to-resize handle (optional)
 
-    default_point_kwargs = dict(s=20, c='red', alpha=0.8, edgecolor='k', linewidth=0.5, zorder=3)
-    if point_kwargs:
-        default_point_kwargs.update(point_kwargs)
-    ax.scatter(x, y, **default_point_kwargs)
+    ax.scatter(x, y, s=20, c='red', alpha=0.8, edgecolor='k', linewidth=0.5, zorder=3)
 
     ax.set_xlim(xmin, xmax)
     ax.set_ylim(ymin, ymax)
@@ -253,8 +255,8 @@ def plot_points_on_cx_basemap(df, extents, lat_col='latitude', lon_col='longitud
         layout=widgets.Layout(align_items="center", justify_content="center", margin="24px 24px 24px 24px", width="auto"),
     )
 
-    fig.canvas.layout.width = f"{figsize[0]}in"
-    fig.canvas.layout.flex = "0 0 auto"
+    fig.canvas.layout.width = f"{figsize[0]}in" # type: ignore[attr-defined]
+    fig.canvas.layout.flex = "0 0 auto"         # type: ignore[attr-defined]
 
     layout = widgets.HBox(
         [fig.canvas, controls],
@@ -271,14 +273,13 @@ def plot_points_on_cx_basemap(df, extents, lat_col='latitude', lon_col='longitud
         return {
             'min_latitude': round(lat_min,2), 'max_latitude': round(lat_max,2),
             'min_longitude':round(_wrap_lon(lon_min_raw), 2), 'max_longitude':round( _wrap_lon(lon_max_raw),2),
-            #'min_longitude':round(lon_min_raw, 2), 'max_longitude':round(lon_max_raw,2),
         }
 
     return fig, ax, get_extents
 
 
 def plot_points_on_saved_basemap(map_path, extents, df, lat_col='latitude', lon_col='longitude',
-                                   figsize=(3, 3), title=None, point_kwargs=None):
+                                 figsize=(3, 3), title=None):
     """
     Static (non-interactive) plot of a previously-saved basemap PNG (from
     save_region_map) with lat/lon points overlaid, positioned using the same
@@ -296,6 +297,7 @@ def plot_points_on_saved_basemap(map_path, extents, df, lat_col='latitude', lon_
               save_region_map when map_path was created.
     """
     to_3857 = Transformer.from_crs("EPSG:4326", "EPSG:3857", always_xy=True)
+
     img = mpimg.imread(map_path)
 
     crosses_dateline = extents['min_longitude'] > extents['max_longitude']
@@ -308,22 +310,17 @@ def plot_points_on_saved_basemap(map_path, extents, df, lat_col='latitude', lon_
 
     lons = df[lon_col].values.astype(float).copy()
     lats = df[lat_col].values
+
     x, y = to_3857.transform(lons, lats)
     if crosses_dateline:
         x = np.where(lons < extents['min_longitude'], x + _MERC_FULL_WIDTH, x)
-
-    x, y = to_3857.transform(lons, df[lat_col].values)
 
     print(f'x diff: {xmax - xmin}, y diff: {ymax - ymin}, x/y ratio: {(xmax - xmin) / (ymax - ymin)}')
 
     fig, ax = plt.subplots(figsize=figsize)
 
     ax.imshow(img, extent=(xmin, xmax, ymin, ymax), origin='upper')
-
-    default_point_kwargs = dict(s=20, c='red', alpha=0.8, edgecolor='k', linewidth=0.5, zorder=3)
-    if point_kwargs:
-        default_point_kwargs.update(point_kwargs)
-    ax.scatter(x, y, **default_point_kwargs)
+    ax.scatter(x, y, s=20, c='red', alpha=0.8, edgecolor='k', linewidth=0.5, zorder=3)
 
     ax.set_xlim(xmin, xmax)
     ax.set_ylim(ymin, ymax)
@@ -430,9 +427,17 @@ def populate_random_points(df, extents, lat_col='latitude', lon_col='longitude',
     target = df if inplace else df.copy()
     n = len(target)
 
+
+    crosses_dateline = extents['min_longitude'] > extents['max_longitude']
+    if crosses_dateline:
+        print('crosses dateline', f"{extents['min_longitude']} > {extents['max_longitude']}")
+    max_long = extents['max_longitude'] + 360 if crosses_dateline else extents['max_longitude']
+    print(extents['min_longitude'], max_long)
+
     rng = np.random.default_rng(random_seed)
     target[lat_col] = rng.uniform(extents['min_latitude'], extents['max_latitude'], size=n)
-    target[lon_col] = rng.uniform(extents['min_longitude'], extents['max_longitude'], size=n)
+    target[lon_col] = rng.uniform(extents['min_longitude'], max_long, size=n)
+    target[lon_col] = np.where(target[lon_col] > 180, target[lon_col] - 360, target[lon_col])
 
     print(f"Populated {n} row(s) with random points within extents {extents}.")
 
