@@ -1,6 +1,6 @@
 # Anqa
 
-Anqa is a data standard for time-frequency annotated wildlife sound files. An example can be found [here](https://www.kaggle.com/datasets/ollypowell/nz-wild-sound). Also the latest working example of the annotation notebook, together with some sample data can be found [here](https://filedn.eu/l1723vRFnsquJMoK85UThX0/Anqa_Annotate_Notebook/).
+Anqa is a data standard for time-frequency annotated wildlife sound files. An example can be found [here](https://www.kaggle.com/datasets/ollypowell/nz-wild-sound)
 
 The goal for this project is to encourage regional institutions to produce and share strongly labelled regional datasets, to a common standard, enabling better regional models and local capacity building.
 
@@ -10,19 +10,16 @@ The goal for this project is to encourage regional institutions to produce and s
 * **Metadata first** - One row per audio file, including lat, long in WGS84 coordinates and a date-time stamp in ISO 8601.  The metadata should follow any files subsequently derived from the source files.
 * **Labels stored in a separate file**, with one row per label, with a many to one relationship with the metadata file, matching by relative file name.
 * **e-bird** labels for birds, defaulting to **inaturalist** codes where no e-bird label is available
-* **Every animal** sound (plus any other class that may be useful) must get a time-frequency box.  Where the species can not be identified, fall back to a higher taxonomic order.  For example insects should use 47158.  Where no inaturalist code exists fall back to lower case in English, no underscores.  eg 'chainsaw', 'helicopter', 'boat', 'vehicle'.
+* **Every animal** sound (plus any other class that may be useful) must get a time-frequency box.  Where the species can not be identified, fall back to a higher taxonomic order.  For example insects should use 47158.  Where no inaturalist code exists fall back to lower case in English.  eg 'chainsaw', 'helicopter', 'boat', 'vehicle'.
 * **A naming schema** matching the above codes to what ever local scheme is to be used, plus the scientific name
 * **An 'unknown' label** for any wildlife sound that can not be identified.
 * **Original source filename**, start-stop time within, and sampling rate are tracked through subsequent chunking or resampling
 * **Modularity** - It should be possible to merge any two datasets programatically, whilst keeping the above properties
-* **Open Source** CC-BY licence, where no licence already exists for a given row-item in the metadata
+* **Open Source** CC-BY-4.0 licence, where no licence already exists for a given row-item in the metadata
 
 Whilst open-sourcing the training data, regional institutions should also be encouraged to make careful use of their date-time-location metadata to create and hold back independent test sets for model selection and calibration.
 
-By creating models that also predict time-frequency boxes in the same format, we enable efficient data reviewing, model calibration, and continuous improvement of the datasets through human-in-loop review in a single unified format.
-
-<img src=".//images/anqa_diagram.png" width="900">
-
+<img src=".//images/anqa_diagram.svg" width="900">
 
 ## Motivation
 
@@ -34,13 +31,22 @@ The Xeno-Canto and Inaturalist arbitrary length formats have a number of shortco
 
 * It is hard to build strong models from training on the inherently weak-labelling in the Xeno-Canto data.  A large proportion of this data contains false negatives, whilst the training routine has no way to ensure sub-sampling contains sound the expected classes, leading to false positives during training.
 
-On the model output side, segment-level predictions also have some shortcommings:
+On the model output side, uncalibrated segment-level predictions also have some major challenges:
 
-* The fixed-segment-length predictions introduce a quantisation effect that removes or distorts any concept of bird abundance.  This distortion is different by species due to differing call lengths and frequency.
+* They are hard to interpret, or compare to annotated data without first applying a binary threshold in some form. 
 
-* The annotated data is incomparable to model predictions, making it hard to perform model calibration.
+* Any choice of that threshold strongly effects any metrics of abundance of interest to monitoring studies.
 
-The value-proposition here is for regional institutions to use their own experts to create and time-frequency box annotated datasets.  Then for the rest of time a world-leading model architecture is just a code-fork away.  At the same time the training and test datasets can be continuously reviewed and improved as an integral part of model calibration from ongoing fieldwork.
+* Whilst the model quality (as measured by metrics like average precision, or ROC-AUC) for a given location may be consistent, the scale may not be.  For example a recorder in a windy location could produce a very different distribution to one placed in a sheltered position.  If the two were compared directly with the same threshold and no scaling for background noise, the result could be meaningless.
+
+With a suitable workflow a small portion of the monitoring data can be sub-sampled & manually labeled.  Then we can fairly scale either the prediction scores themselves (for example with [temperature scaling](https://scikit-learn.org/stable/modules/calibration.html#temperature-scaling) or [Platt scaling](https://en.wikipedia.org/wiki/Platt_scaling)), or the binary thresholds on a per-class basis. 
+
+The value-proposition here is for all training and calibration datasets to be made in a single unified form: Fully labelled 1-minute time-frequency boxes.  The metadata is used to create two independent splits:
+
+* Training data added to the existing pool and is shared openly to enable open efforts to build strong models.
+* The callibration & test datasets are kept private so those instiutions retain the ability to fairly compare and calibrate future models.
+
+As models get better at generalising over time, and the size and coverage of the calibration datasets grow, as does the strength of the training data. Eventually the need for sub-sampling & manually labelling diminishes.
 
 ## Proposed Columns
 
@@ -67,6 +73,7 @@ For the `metadata.parquet` file the meaning of the fields is described in more d
 | source_end_s | 60 | float | End time for this sample relative to source recording start
 | source_device | AR4 | string  |  Individual device unique ID if avaliable, otherwise model name
 | models_used | BirdNet v3.0 |  string | List any ML models used to label this sample  
+| guano |   |  string | (Optional) metadata coming from sources that use the GUANO format 
 
 <br>
 
