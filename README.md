@@ -1,8 +1,10 @@
 # Anqa
 
-Anqa is a data standard for time-frequency annotated wildlife sound files. An example can be found [here](https://www.kaggle.com/datasets/ollypowell/nz-wild-sound)
+Anqa is a data standard for machine learning datasets with time-frequency annotated wildlife sound files. An example can be found [here](https://www.kaggle.com/datasets/ollypowell/nz-wild-sound).  
 
-The goal for this project is to encourage regional institutions to produce and share strongly labelled regional datasets, to a common standard, enabling better regional models and local capacity building.
+The goal for this project is to encourage regional institutions to produce and share strongly labelled regional datasets, to a common intermediate form, enabling better regional models, time-frequency box use throughout the training code-base, and local capacity building.
+
+The long-term data storage can still be according to the needs of individual annotation tools/projects/IT infrastructure, (for example in a database, or in a `.json` like format) but then converted to Anqa as part of an extraction pipeline.
 
 ## Principles
 
@@ -11,11 +13,11 @@ The goal for this project is to encourage regional institutions to produce and s
 * **Labels stored in a separate file**, with one row per label, with a many to one relationship with the metadata file, matching by relative file name.
 * **e-bird** labels for birds, defaulting to **inaturalist** codes where no e-bird label is available
 * **Every animal** sound (plus any other class that may be useful) must get a time-frequency box.  Where the species can not be identified, fall back to a higher taxonomic order.  For example insects should use 47158.  Where no inaturalist code exists fall back to lower case in English.  eg 'chainsaw', 'helicopter', 'boat', 'vehicle'.
-* **A naming schema** matching the above codes to what ever local scheme is to be used, plus the scientific name
+* **A single naming schema** for every region, matching the above codes to what ever local scheme is to be used, plus the scientific name
 * **An 'unknown' label** for any wildlife sound that can not be identified.
 * **Original source filename**, start-stop time within, and sampling rate are tracked through subsequent chunking or resampling
 * **Modularity** - It should be possible to merge any two datasets programatically, whilst keeping the above properties
-* **Open Source** CC-BY-4.0 licence, where no licence already exists for a given row-item in the metadata
+* **Open Source** Either CC-BY-4.0 or CDLA-Permissive-2.0 licence, where no licence already exists for a given row-item in the metadata
 
 Whilst open-sourcing the training data, regional institutions should also be encouraged to make careful use of their date-time-location metadata to create and hold back independent test sets for model selection and calibration.
 
@@ -23,9 +25,9 @@ Whilst open-sourcing the training data, regional institutions should also be enc
 
 ## Motivation
 
-This work has come out of development of the *Kaytoo* model for the Department of Conservation (New Zealand).  The source data for that project came in multiple formats, some could not be used at all, whilst the rest were initially converted to the format used by Xeno-Canto and BirdCLEF.  That format labels presence/absence of species for arbitrary length sound crops.  The model predictions for BirdCLEF models are segment level (5-second) multi-label presence-absence.
+This work has come out of development of the *Kaytoo* model for the Department of Conservation (New Zealand).  The source data for that project came in multiple formats, some could not be used at all, whilst the rest were initially converted to the format used for BirdCLEF.  That format labels presence/absence of species for arbitrary length sound crops.  The model predictions for BirdCLEF models are segment level (5-second) multi-label presence-absence.
 
-The Xeno-Canto and Inaturalist arbitrary length formats have a number of shortcomings: 
+Without annotations the Xeno-Canto and Inaturalist arbitrary length formats have a number of shortcomings: 
 
 * It it is inefficient trying to deliver any continuous improvement to the training dataset by reviewing the short crops.  It is much faster the reviewer to look at a fixed length (1-minute) soundscape with a suitable visualisation tool, and confirm or edit multiple annotations.  If short crops are needed for model training they can easily be extracted programatically.
 
@@ -64,7 +66,7 @@ For the `metadata.parquet` file the meaning of the fields is described in more d
 | latitude | -41.32 | float  |  Latitude of the recording in WGS84 (EPSG:4326)
 | longitude | 173.29 | float |  Longitude of the recording in WGS84 (EPSG:4326)
 | author | Mr Bigglesworth |  string |  Name of the original annotator |
-| licence | CC BY 4.0 | string |  Licence, ideally CC BY 4.0  |
+| licence | CC-BY-4.0 | string |  Licence, ideally CC BY 4.0  |
 | recorded_on | 2022-10-22 07:45:04 |  string  |  Recording date-time in ISO 8601
 | reviewed_on | 2023-10-22 |  string  |  Last time the file was reviewed (or originally labelled). Date-time in ISO 8601
 | source_filename | 20190831_074504.wav | string  |  Relative filepath of the original recording
@@ -72,7 +74,7 @@ For the `metadata.parquet` file the meaning of the fields is described in more d
 | source_start_s | 0 | float | Start time for this sample relative to source recording start
 | source_end_s | 60 | float | End time for this sample relative to source recording start
 | source_device | AR4 | string  |  Individual device unique ID if avaliable, otherwise model name
-| models_used | BirdNet v3.0 |  string | List any ML models used to label this sample  
+| models_used | BirdNet v3.0 |  string | List any ML models used to label or assist with labelling this sample  
 | guano |   |  string | (Optional) metadata coming from sources that use the GUANO format 
 
 <br>
